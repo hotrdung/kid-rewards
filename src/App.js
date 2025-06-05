@@ -16,7 +16,7 @@ import {
     collection,
     addDoc,
     doc,
-    setDoc, 
+    setDoc,
     getDoc,
     getDocs,
     updateDoc,
@@ -26,20 +26,20 @@ import {
     where,
     Timestamp,
     writeBatch,
-    arrayUnion, 
+    arrayUnion,
 } from 'firebase/firestore';
 import {
     PlusCircle, Edit3, Trash2, CheckCircle, Gift, User, LogOut, DollarSign, ListChecks,
     Award, Users, ClipboardList, Trophy, Bell, CalendarDays, Repeat, UserCheck, LogIn,
     ThumbsUp, ThumbsDown, ArrowUpCircle, ArrowDownCircle, Mail, ChevronsUpDown, RefreshCcw, AlertTriangle, Star,
     PackageCheck, PackageX, Eye, UsersRound, ShieldPlus, Building, UserCog, UserPlus, Coins,
-    HomeIcon, AlertCircle, Info, MoreHorizontal 
+    HomeIcon, AlertCircle, Info, MoreHorizontal
 } from 'lucide-react';
 
 // --- Firebase Configuration ---
 const firebaseConfig = typeof __firebase_config !== 'undefined'
     ? JSON.parse(__firebase_config)
-    : { 
+    : {
         apiKey: process.env.REACT_APP_FIREBASE_API_KEY || "YOUR_API_KEY",
         authDomain: process.env.REACT_APP_FIREBASE_AUTH_DOMAIN || "YOUR_AUTH_DOMAIN",
         projectId: process.env.REACT_APP_FIREBASE_PROJECT_ID || "YOUR_PROJECT_ID",
@@ -48,16 +48,16 @@ const firebaseConfig = typeof __firebase_config !== 'undefined'
         appId: process.env.REACT_APP_FIREBASE_APP_ID || "YOUR_APP_ID"
     };
 
-const currentAppId = typeof __app_id !== 'undefined' 
+const currentAppId = typeof __app_id !== 'undefined'
     ? __app_id
-    : (process.env.REACT_APP_CHORE_APP_ID || 'kid-rewards-app-multifamily-v3'); 
+    : (process.env.REACT_APP_CHORE_APP_ID || 'kid-rewards-app-multifamily-v3');
 
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
 
 // --- System Admin Email Configuration ---
-const SA_EMAILS_STR = process.env.REACT_APP_SA_EMAILS || ""; 
+const SA_EMAILS_STR = process.env.REACT_APP_SA_EMAILS || "";
 const SYSTEM_ADMIN_EMAILS = SA_EMAILS_STR.split(',').map(email => email.trim().toLowerCase()).filter(email => email);
 
 // --- Firestore Path Helpers ---
@@ -98,18 +98,21 @@ const migrateDataToFamily = async (familyId, saUserId, saDisplayName, reportErro
 // --- Main App Component ---
 function App() {
     const [firebaseAuthUser, setFirebaseAuthUser] = useState(null);
-    const [loggedInUser, setLoggedInUser] = useState(null); 
+    const [loggedInUser, setLoggedInUser] = useState(null);
     const [isAuthReady, setIsAuthReady] = useState(false);
-    const [allFamiliesForSA, setAllFamiliesForSA] = useState([]); 
-    const [kids, setKids] = useState([]); 
-    const [tasks, setTasks] = useState([]); 
-    const [rewards, setRewards] = useState([]); 
-    const [completedTasks, setCompletedTasks] = useState([]); 
-    const [redeemedRewardsData, setRedeemedRewardsData] = useState([]); 
+    const [allFamiliesForSA, setAllFamiliesForSA] = useState([]);
+    const [kids, setKids] = useState([]);
+    const [tasks, setTasks] = useState([]);
+    const [rewards, setRewards] = useState([]);
+    const [completedTasks, setCompletedTasks] = useState([]);
+    const [redeemedRewardsData, setRedeemedRewardsData] = useState([]);
     const [isLoading, setIsLoading] = useState(true);
     const [error, setErrorState] = useState('');
-    
-    const setError = (message) => { console.error("Global Error Set:", message); setErrorState(message); };
+
+    const setError = (message) => {
+        console.error("Global Error Set:", message);
+        setErrorState(message);
+    };
 
     const [confirmModalState, setConfirmModalState] = useState({ isOpen: false, title: '', message: '', onConfirm: () => {}, children: null });
     const showConfirmation = (title, message, onConfirmAction, confirmText = "Confirm", modalChildren = null) => { setConfirmModalState({ isOpen: true, title, message, onConfirm: onConfirmAction, confirmText, children: modalChildren }); };
@@ -118,30 +121,39 @@ function App() {
     useEffect(() => {
         const unsubscribe = onAuthStateChanged(auth, async (user) => {
             setIsLoading(true);
-            setErrorState(''); 
-            setFirebaseAuthUser(user); 
+            setErrorState('');
+            setFirebaseAuthUser(user);
 
             if (user && !user.isAnonymous) {
                 const userDocRef = doc(db, usersCollectionPath, user.uid);
                 let userDocSnap;
-                try { userDocSnap = await getDoc(userDocRef); } 
+                try { userDocSnap = await getDoc(userDocRef); }
                 catch (e) { setError("Failed to fetch user profile."); setIsLoading(false); setIsAuthReady(true); return; }
 
                 const currentIsSA = SYSTEM_ADMIN_EMAILS.includes(user.email?.toLowerCase() || '');
-                
+
                 let storedProfileData = {};
                 if (userDocSnap.exists()) {
                     storedProfileData = userDocSnap.data();
                 }
 
+                // Determine the initial activeFamilyRole:
+                // If this effect is re-running for an already logged-in user (e.g., due to allFamiliesForSA changing),
+                // and the firebaseAuthUser hasn't changed, respect the current loggedInUser's activeFamilyRole.
+                // Otherwise (new login, or firebaseAuthUser changed), use the stored profile data.
+                let determinedInitialActiveFamilyRole = storedProfileData.activeFamilyRole || null;
+                if (loggedInUser && loggedInUser.uid === user.uid && firebaseAuthUser && firebaseAuthUser.uid === user.uid) {
+                    determinedInitialActiveFamilyRole = loggedInUser.activeFamilyRole;
+                }
+
                 let userProfileData = {
                     uid: user.uid, email: user.email, displayName: user.displayName,
-                    isSA: currentIsSA, 
+                    isSA: currentIsSA,
                     familyRoles: storedProfileData.familyRoles || [],
-                    activeFamilyRole: storedProfileData.activeFamilyRole || null,
+                    activeFamilyRole: determinedInitialActiveFamilyRole,
                     defaultFamilyDataMigrated: storedProfileData.defaultFamilyDataMigrated || false,
                 };
-                
+
                 if (!userDocSnap.exists()) {
                     await setDoc(userDocRef, { ...userProfileData, createdAt: Timestamp.now(), totalEarnedPoints: 0 });
                 } else {
@@ -153,7 +165,7 @@ function App() {
                          await updateDoc(userDocRef, updates);
                     }
                 }
-                
+
                 if (userProfileData.isSA && (!userProfileData.familyRoles || userProfileData.familyRoles.filter(r => r.role === 'parent').length === 0)) {
                     const defaultFamilyName = `${userProfileData.displayName || 'Admin'}'s Default Family`;
                     try {
@@ -165,15 +177,15 @@ function App() {
                         });
                         const defaultFamilyId = newFamilyRef.id;
                         const newParentRole = { familyId: defaultFamilyId, role: 'parent', familyName: defaultFamilyName };
-                        
+
                         let migrationSuccessful = true;
                         if (!userProfileData.defaultFamilyDataMigrated) {
                             migrationSuccessful = await migrateDataToFamily(defaultFamilyId, user.uid, userProfileData.displayName, setError);
                         }
                         const updatedRoles = [...userProfileData.familyRoles, newParentRole];
-                        await updateDoc(userDocRef, { 
-                            familyRoles: updatedRoles, 
-                            activeFamilyRole: newParentRole, 
+                        await updateDoc(userDocRef, {
+                            familyRoles: updatedRoles,
+                            activeFamilyRole: newParentRole,
                             defaultFamilyDataMigrated: userProfileData.defaultFamilyDataMigrated || migrationSuccessful,
                         });
                         userProfileData.familyRoles = updatedRoles;
@@ -181,9 +193,9 @@ function App() {
                         userProfileData.defaultFamilyDataMigrated = userProfileData.defaultFamilyDataMigrated || migrationSuccessful;
                     } catch (famError) { setError("Could not set up default family. " + famError.message); }
                 }
-                
+
                 if (userProfileData.familyRoles && userProfileData.familyRoles.length > 0) {
-                    const fetchedFamilies = allFamiliesForSA.reduce((acc, fam) => { 
+                    const fetchedFamilies = allFamiliesForSA.reduce((acc, fam) => {
                         acc[fam.id] = fam.familyName;
                         return acc;
                     }, {});
@@ -191,11 +203,11 @@ function App() {
                     const rolesWithUpToDateNames = await Promise.all(
                         userProfileData.familyRoles.map(async (fr) => {
                             let currentFamilyName = fetchedFamilies[fr.familyId];
-                            if (!currentFamilyName || currentFamilyName === "Unknown Family" || currentFamilyName === "Error: Family Name") { 
+                            if (!currentFamilyName || currentFamilyName === "Unknown Family" || currentFamilyName === "Error: Family Name") {
                                 try {
                                     const familyDocSnap = await getDoc(doc(db, familiesCollectionPath, fr.familyId));
                                     currentFamilyName = familyDocSnap.exists() ? familyDocSnap.data().familyName : "Unknown Family";
-                                    fetchedFamilies[fr.familyId] = currentFamilyName; 
+                                    fetchedFamilies[fr.familyId] = currentFamilyName;
                                 } catch (famNameError) {
                                     console.error(`Error fetching family name for ${fr.familyId}:`, famNameError);
                                     currentFamilyName = "Error: Family Name";
@@ -211,17 +223,27 @@ function App() {
                             r => r.familyId === userProfileData.activeFamilyRole.familyId && r.role === userProfileData.activeFamilyRole.role
                         );
                         if (activeRoleDetails) {
-                            userProfileData.activeFamilyRole = activeRoleDetails; 
-                        } else if (rolesWithUpToDateNames.length > 0) { 
-                             userProfileData.activeFamilyRole = rolesWithUpToDateNames[0]; 
-                        } else { 
+                            userProfileData.activeFamilyRole = activeRoleDetails;
+                        } else if (rolesWithUpToDateNames.length > 0) {
+                            // Active role from profile/state is no longer valid, pick the first available.
+                            userProfileData.activeFamilyRole = rolesWithUpToDateNames[0];
+                        } else {
                             userProfileData.activeFamilyRole = null;
                         }
-                    } else if (rolesWithUpToDateNames.length > 0) { 
-                        userProfileData.activeFamilyRole = rolesWithUpToDateNames[0];
+                    } else if (rolesWithUpToDateNames.length > 0) {
+                        // No active role was set (e.g. determinedInitialActiveFamilyRole was null).
+                        // Assign one only if it's not an intentional admin view state during a refresh.
+                        const isLikelyNewSessionOrNoExistingPreference =
+                            !(loggedInUser && loggedInUser.uid === user.uid && firebaseAuthUser && firebaseAuthUser.uid === user.uid) ||
+                            (storedProfileData.activeFamilyRole === null || storedProfileData.activeFamilyRole === undefined);
+
+                        if (isLikelyNewSessionOrNoExistingPreference) {
+                            userProfileData.activeFamilyRole = rolesWithUpToDateNames[0];
+                        }
+                        // If determinedInitialActiveFamilyRole was null (e.g. from admin view switch) and it's a refresh,
+                        // it remains null, which is intended for the admin dashboard view.
                     }
                 }
-                
                 if (!userProfileData.isSA && user.email && (!userProfileData.familyRoles || userProfileData.familyRoles.length === 0)) {
                     console.log(`User ${user.email} is not SA and has no family roles. Attempting to find kid profile across families.`);
                     const allCurrentFamiliesList = allFamiliesForSA.length > 0 ? allFamiliesForSA : (await getDocs(collection(db, familiesCollectionPath))).docs.map(d => ({id: d.id, ...d.data()}));
@@ -241,37 +263,64 @@ function App() {
                             userProfileData.familyRoles.push(newKidRole);
                             userProfileData.activeFamilyRole = newKidRole;
                             console.log(`Associated ${user.email} as kid in family ${family.familyName}`);
-                            break; 
+                            break;
                         }
                     }
                 }
                 setLoggedInUser(userProfileData);
 
-            } else { 
-                setLoggedInUser(null); 
+            } else {
+                setLoggedInUser(null);
                  try {
                     if (!auth.currentUser || !auth.currentUser.isAnonymous) {
-                        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) { await signInWithCustomToken(auth, __initial_auth_token); } 
+                        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) { await signInWithCustomToken(auth, __initial_auth_token); }
                         else { await signInAnonymously(auth); }
                     }
                 } catch (authError) { setError("Failed to initialize a base session."); }
             }
             setIsAuthReady(true);
-            setIsLoading(false); 
+            setIsLoading(false);
         });
         return () => unsubscribe();
-    }, [allFamiliesForSA]); 
+    }, [allFamiliesForSA, firebaseAuthUser]); // Added firebaseAuthUser
 
+
+    // Derived values from loggedInUser for stable dependencies in the data fetching effect
+    const loggedInUserUid = loggedInUser?.uid;
+    const loggedInUserIsSA = loggedInUser?.isSA;
+    const activeFamilyId = loggedInUser?.activeFamilyRole?.familyId;
+    // activeFamilyRole?.role could also be a dependency if logic inside effect branches on role type
 
     useEffect(() => {
-        if (!isAuthReady || !firebaseAuthUser) { setIsLoading(false); return; }
-        let unsubscribes = []; setIsLoading(true);
-        if (loggedInUser?.isSA && !loggedInUser.activeFamilyRole) { 
-            const familiesQuery = query(collection(db, familiesCollectionPath));
-            unsubscribes.push(onSnapshot(familiesQuery, (snapshot) => { setAllFamiliesForSA(snapshot.docs.map(d => ({ id: d.id, ...d.data() }))); }, err => console.error("Error fetching families:", err)));
+        console.log('[Effect for loggedInUser] Start. isAuthReady:', isAuthReady, 'firebaseAuthUser:', !!firebaseAuthUser, 'loggedInUser UID:', loggedInUser?.uid, 'Active Role:', loggedInUser?.activeFamilyRole);
+        if (!isAuthReady || !firebaseAuthUser) {
+            setIsLoading(false);
+            console.log('[Effect for loggedInUser] Exiting: Auth not ready or no Firebase user.');
+            return;
         }
-        if (loggedInUser?.activeFamilyRole?.familyId) {
-            const familyId = loggedInUser.activeFamilyRole.familyId;
+
+        let unsubscribes = [];
+        setIsLoading(true);
+
+        // If SA and no active family role (meaning, in Admin Dashboard view)
+        if (loggedInUserIsSA && !activeFamilyId) { // Use derived stable values
+            console.log('[Effect for loggedInUser] SA in Admin Dashboard view (based on derived state). Fetching all families.');
+            const familiesQuery = query(collection(db, familiesCollectionPath));
+            unsubscribes.push(onSnapshot(familiesQuery, (snapshot) => {
+                console.log('[Effect for loggedInUser] Fetched all families for SA. Count:', snapshot.docs.length);
+                setAllFamiliesForSA(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
+            }, err => {
+                console.error("[Effect for loggedInUser] Error fetching families for SA:", err);
+                setError(`Failed to load families for admin. ${err.message}`);
+            }));
+            // When SA is in admin view, clear family-specific data
+            console.log('[Effect for loggedInUser] SA in Admin View: Clearing family-specific data.');
+            setKids([]); setTasks([]); setRewards([]); setCompletedTasks([]); setRedeemedRewardsData([]);
+        }
+        // If there's an active family role (applies to Parent or Kid view, or SA viewing a specific family)
+        else if (activeFamilyId) { // Use derived stable value
+            const familyId = activeFamilyId;
+            console.log(`[Effect for loggedInUser] User in Family View (Family ID: ${familyId}). Fetching family-specific collections.`);
             const collectionsToFetch = [
                 { pathGetter: getFamilyScopedCollectionPath, name: 'kids', setter: setKids },
                 { pathGetter: getFamilyScopedCollectionPath, name: 'tasks', setter: setTasks },
@@ -281,25 +330,63 @@ function App() {
             ];
             collectionsToFetch.forEach(col => {
                 const q = query(collection(db, col.pathGetter(familyId, col.name)));
-                unsubscribes.push(onSnapshot(q, (snapshot) => { col.setter(snapshot.docs.map(d => ({ id: d.id, ...d.data() }))); }, (err) => { console.error(`Error fetching ${col.name} for family ${familyId}:`, err); setError(`Failed to load ${col.name}.`); }));
+                unsubscribes.push(onSnapshot(q, (snapshot) => {
+                    console.log(`[Effect for loggedInUser] Fetched ${col.name} for family ${familyId}. Count: ${snapshot.docs.length}`);
+                    col.setter(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
+                }, (err) => {
+                    console.error(`[Effect for loggedInUser] Error fetching ${col.name} for family ${familyId}:`, err);
+                    setError(`Failed to load ${col.name}.`);
+                }));
             });
-        } else { setKids([]); setTasks([]); setRewards([]); setCompletedTasks([]); setRedeemedRewardsData([]); }
-        setIsLoading(false); return () => unsubscribes.forEach(unsub => unsub());
-    }, [isAuthReady, firebaseAuthUser, loggedInUser]);
+        }
+        // If loggedInUser exists but no activeFamilyRole and is NOT an SA (should be rare, e.g. new user not yet assigned)
+        // OR if for any other reason family-specific data should be cleared (e.g. user logs out implicitly by firebaseAuthUser changing)
+        else if (loggedInUserUid && !activeFamilyId && !loggedInUserIsSA) { // Use derived stable values
+             console.log('[Effect for loggedInUser] No active family role and not SA. Clearing family-specific data.');
+             setKids([]); setTasks([]); setRewards([]); setCompletedTasks([]); setRedeemedRewardsData([]);
+        } else if (!loggedInUser) {
+            console.log('[Effect for loggedInUser] loggedInUser is null. Clearing family-specific data.');
+            setKids([]); setTasks([]); setRewards([]); setCompletedTasks([]); setRedeemedRewardsData([]);
+        }
+
+
+        setIsLoading(false);
+        console.log('[Effect for loggedInUser] End of effect.');
+        return () => {
+            console.log('[Effect for loggedInUser] Cleanup running for subscriptions.');
+            unsubscribes.forEach(unsub => unsub());
+        };
+    }, [isAuthReady, firebaseAuthUser, loggedInUserUid, loggedInUserIsSA, activeFamilyId]); // Updated Dependencies
+
 
     const handleLoginWithGoogle = async () => { const provider = new GoogleAuthProvider(); try { setErrorState(''); await signInWithPopup(auth, provider); } catch (googleAuthError) { if (googleAuthError.code !== 'auth/popup-closed-by-user') { setError("Failed to sign in with Google."); }}};
     const handleLogout = async () => { try { await signOut(auth); setLoggedInUser(null); } catch (logoutError) { setError("Failed to sign out."); }};
 
-    const switchToAdminView = () => { if (loggedInUser?.isSA) { setLoggedInUser(prev => ({ ...prev, activeFamilyRole: null })); } };
-    const switchToFamilyView = (familyRole) => { 
+    const switchToAdminView = () => {
+        console.log('switchToAdminView called. Current loggedInUser:', loggedInUser);
+        if (loggedInUser?.isSA) {
+            console.log('User is SA. Setting activeFamilyRole to null.');
+            setLoggedInUser(prev => {
+                const newState = { ...prev, activeFamilyRole: null };
+                console.log('New loggedInUser state (target for admin view):', newState);
+                return newState;
+            });
+        } else {
+            console.log('User is not SA or loggedInUser is null. No action taken in switchToAdminView.');
+        }
+    };
+
+    const switchToFamilyView = (familyRole) => {
+        console.log('switchToFamilyView called with familyRole:', familyRole);
         const familyFromList = allFamiliesForSA.find(f => f.id === familyRole.familyId);
         const updatedRole = familyFromList ? { ...familyRole, familyName: familyFromList.familyName } : familyRole;
-        setLoggedInUser(prev => ({ ...prev, activeFamilyRole: updatedRole })); 
+        console.log('Setting activeFamilyRole to:', updatedRole);
+        setLoggedInUser(prev => ({ ...prev, activeFamilyRole: updatedRole }));
     };
 
     if (!isAuthReady || isLoading) { return <div className="flex items-center justify-center min-h-screen bg-gray-100"><div className="text-xl font-semibold">Initializing App & Loading Data...</div></div>; }
     if (error) { return <div className="flex flex-col items-center justify-center min-h-screen bg-gray-100 p-4"><div className="text-xl font-semibold text-red-500 p-4 bg-red-100 rounded-md mb-4">{error}</div><Button onClick={() => {setErrorState(''); window.location.reload();}} className="bg-blue-500 hover:bg-blue-600">Try Again</Button></div>; }
-    
+
     if (!firebaseAuthUser || (firebaseAuthUser.isAnonymous && (!loggedInUser || (!loggedInUser.isSA && !loggedInUser.activeFamilyRole)))) {
         return ( <div className="min-h-screen bg-gradient-to-br from-purple-600 to-blue-500 flex flex-col items-center justify-center p-4"><div className="text-center mb-12"><Award size={60} className="text-yellow-300 mx-auto mb-4" /><h1 className="text-5xl font-bold text-white mb-4">Kid Rewards</h1><p className="text-xl text-purple-200">Login with Google to continue.</p></div><Card className="w-full max-w-md"><h2 className="text-2xl font-semibold text-gray-700 mb-6 text-center">Sign In</h2><Button onClick={handleLoginWithGoogle} className="w-full mb-4 bg-red-500 hover:bg-red-600 text-white" icon={LogIn}>Login with Google</Button><p className="text-xs text-gray-500 text-center mt-4">Parents and Kids with registered emails can log in here.</p></Card>{SYSTEM_ADMIN_EMAILS.length === 0 && process.env.NODE_ENV === 'development' && (<p className="mt-4 text-sm text-yellow-300 bg-black bg-opacity-20 p-2 rounded">Dev Note: No SA emails configured.</p>)}</div>);
     }
@@ -309,16 +396,23 @@ function App() {
     }
 
     let viewToRender;
-    if (loggedInUser.isSA && !loggedInUser.activeFamilyRole) { 
+    if (loggedInUser.isSA && !loggedInUser.activeFamilyRole) {
+        console.log("App.js: Rendering SystemAdminDashboard for user:", loggedInUser.uid);
         viewToRender = <SystemAdminDashboard user={loggedInUser} families={allFamiliesForSA} showConfirmation={showConfirmation} switchToFamilyView={switchToFamilyView} migrateDataToFamilyFunc={migrateDataToFamily} setErrorFunc={setError} />;
     } else if (loggedInUser.activeFamilyRole?.role === 'parent') {
+        console.log("App.js: Rendering ParentDashboard for user:", loggedInUser.uid, "Family:", loggedInUser.activeFamilyRole.familyName);
         viewToRender = <ParentDashboard user={loggedInUser} familyId={loggedInUser.activeFamilyRole.familyId} kids={kids} tasks={tasks} rewards={rewards} completedTasks={completedTasks} redeemedRewardsData={redeemedRewardsData} showConfirmation={showConfirmation} allRewardsGlobal={rewards} switchToAdminViewFunc={switchToAdminView} />;
     } else if (loggedInUser.activeFamilyRole?.role === 'kid') {
         const kidProfile = kids.find(k => k.authUid === loggedInUser.uid || k.email?.toLowerCase() === loggedInUser.email?.toLowerCase());
         if (kidProfile) {
+            console.log("App.js: Rendering KidDashboard for user:", loggedInUser.uid, "Kid:", kidProfile.name);
             viewToRender = <KidDashboard kidData={{...kidProfile, points: kidProfile.points || 0, totalEarnedPoints: kidProfile.totalEarnedPoints || 0}} familyId={loggedInUser.activeFamilyRole.familyId} allTasks={tasks} rewards={rewards} completedTasks={completedTasks} redeemedRewardsData={redeemedRewardsData} showConfirmation={showConfirmation} />;
-        } else { viewToRender = <div className="text-center p-8"><p className="text-xl text-red-500">Your kid profile was not found in family "{loggedInUser.activeFamilyRole.familyName}".</p><p>Please contact your parent.</p></div>; }
-    } else { 
+        } else {
+            console.warn("App.js: Kid profile not found for user:", loggedInUser.uid, "in family:", loggedInUser.activeFamilyRole.familyName);
+            viewToRender = <div className="text-center p-8"><p className="text-xl text-red-500">Your kid profile was not found in family "{loggedInUser.activeFamilyRole.familyName}".</p><p>Please contact your parent.</p></div>;
+        }
+    } else {
+         console.log("App.js: Rendering fallback/welcome view for user:", loggedInUser.uid);
          viewToRender = (<div className="text-center p-8"><h2 className="text-2xl font-semibold mb-4">Welcome, {loggedInUser.displayName}!</h2><p>Your role is not fully set up for a family view.</p>{loggedInUser.isSA && <p>You are a System Admin. <Button onClick={switchToAdminView}>Go to Admin Dashboard</Button></p>}{loggedInUser.familyRoles?.length === 0 && !loggedInUser.isSA && <p>Please ask an Admin or Parent to add you to a family.</p>}</div>);
     }
 
@@ -336,8 +430,7 @@ function App() {
                             {loggedInUser.displayName}
                             {loggedInUser.isSA && <span className="ml-1 px-2 py-0.5 bg-blue-100 text-blue-700 text-xs rounded-full">SA</span>}
                         </span>
-                        
-                        {/* Contextual View Indicators - Buttons moved to dashboard cards */}
+
                         {loggedInUser.isSA && !loggedInUser.activeFamilyRole && (
                              <span className="px-3 py-1 text-sm font-semibold rounded-full bg-blue-100 text-blue-700 hidden md:inline">
                                 Admin Dashboard
@@ -363,26 +456,26 @@ function App() {
 }
 
 // --- SystemAdminDashboard (Includes "Enter Family View" buttons in its card) ---
-const SystemAdminDashboard = ({ user, families, showConfirmation, switchToFamilyView, migrateDataToFamilyFunc, setErrorFunc }) => { 
-    const [activeTab, setActiveTab] = useState('manageFamilies'); 
-    const NavItem = ({ tabName, icon: Icon, label }) => ( <button onClick={() => setActiveTab(tabName)} className={`flex items-center px-4 py-3 rounded-lg transition-colors duration-150 ${activeTab === tabName ? 'bg-blue-600 text-white shadow-md' : 'text-gray-600 hover:bg-blue-100'}`}><Icon size={20} className="mr-2" /> {label}</button>); 
-    
+const SystemAdminDashboard = ({ user, families, showConfirmation, switchToFamilyView, migrateDataToFamilyFunc, setErrorFunc }) => {
+    const [activeTab, setActiveTab] = useState('manageFamilies');
+    const NavItem = ({ tabName, icon: Icon, label }) => ( <button onClick={() => setActiveTab(tabName)} className={`flex items-center px-4 py-3 rounded-lg transition-colors duration-150 ${activeTab === tabName ? 'bg-blue-600 text-white shadow-md' : 'text-gray-600 hover:bg-blue-100'}`}><Icon size={20} className="mr-2" /> {label}</button>);
+
     const parentRoles = user.familyRoles?.filter(r => r.role === 'parent') || [];
 
-    return ( 
-    <div className="space-y-6"> 
-        <Card> 
-            <h2 className="text-3xl font-semibold text-gray-800 mb-1">System Admin Dashboard</h2> 
-            <p className="text-gray-600 mt-1">Manage families and application settings.</p> 
+    return (
+    <div className="space-y-6">
+        <Card>
+            <h2 className="text-3xl font-semibold text-gray-800 mb-1">System Admin Dashboard</h2>
+            <p className="text-gray-600 mt-1">Manage families and application settings.</p>
             {parentRoles.length > 0 && (
                  <div className="mt-4 border-t pt-4">
                     <h4 className="text-md font-semibold mb-2 text-gray-700">Enter a Family as Parent:</h4>
                     <div className="flex flex-wrap gap-2">
                         {parentRoles.map(role => (
-                            <Button 
-                                key={role.familyId} 
-                                onClick={() => switchToFamilyView(role)} 
-                                className="bg-purple-500 hover:bg-purple-600 text-sm" 
+                            <Button
+                                key={role.familyId}
+                                onClick={() => switchToFamilyView(role)}
+                                className="bg-purple-500 hover:bg-purple-600 text-sm"
                                 icon={HomeIcon}
                             >
                                 Enter "{role.familyName}"
@@ -392,12 +485,12 @@ const SystemAdminDashboard = ({ user, families, showConfirmation, switchToFamily
                 </div>
             )}
             <ForceMigrateButton user={user} families={families} showConfirmation={showConfirmation} migrateFunc={migrateDataToFamilyFunc} setError={setErrorFunc} />
-        </Card> 
-        <nav className="bg-white shadow rounded-lg p-2"><div className="flex flex-wrap gap-2"><NavItem tabName="manageFamilies" icon={Building} label="Manage Families" /><NavItem tabName="manageFamilyParents" icon={UserCog} label="Manage Family Parents" /></div></nav> 
-        <div> 
-            {activeTab === 'manageFamilies' && <ManageFamilies families={families} showConfirmation={showConfirmation} currentUser={user} />} 
-            {activeTab === 'manageFamilyParents' && <ManageFamilyParents families={families} showConfirmation={showConfirmation} currentUser={user} />} 
-        </div> 
+        </Card>
+        <nav className="bg-white shadow rounded-lg p-2"><div className="flex flex-wrap gap-2"><NavItem tabName="manageFamilies" icon={Building} label="Manage Families" /><NavItem tabName="manageFamilyParents" icon={UserCog} label="Manage Family Parents" /></div></nav>
+        <div>
+            {activeTab === 'manageFamilies' && <ManageFamilies families={families} showConfirmation={showConfirmation} currentUser={user} />}
+            {activeTab === 'manageFamilyParents' && <ManageFamilyParents families={families} showConfirmation={showConfirmation} currentUser={user} />}
+        </div>
     </div>);
 };
 
@@ -410,12 +503,12 @@ const ManageFamilies = ({ families, showConfirmation, currentUser }) => { const 
 const ManageFamilyParents = ({ families, showConfirmation, currentUser }) => { const [selectedFamilyId, setSelectedFamilyId] = useState(''); const [parentEmailToAdd, setParentEmailToAdd] = useState(''); const [formError, setFormError] = useState(''); const [feedback, setFeedback] = useState(''); const familyOptions = families.map(f => ({ value: f.id, label: f.familyName })); const handleAddParentToFamily = async () => { if (!selectedFamilyId || !parentEmailToAdd.trim()) { setFormError("Please select a family and enter the parent's email."); return; } setFormError(''); setFeedback(''); try { const usersQuery = query(collection(db, usersCollectionPath), where("email", "==", parentEmailToAdd.trim().toLowerCase())); const querySnapshot = await getDocs(usersQuery); if (querySnapshot.empty) { setFormError(`User with email ${parentEmailToAdd} not found. They need to log in to the app at least once.`); return; } const parentUserDoc = querySnapshot.docs[0]; const parentUserId = parentUserDoc.id; const parentUserData = parentUserDoc.data(); const existingRole = parentUserData.familyRoles?.find(r => r.familyId === selectedFamilyId && r.role === 'parent'); if (existingRole) { setFeedback(`${parentEmailToAdd} is already a parent in this family.`); return; } const familyDoc = families.find(f => f.id === selectedFamilyId); const newRole = { familyId: selectedFamilyId, role: 'parent', familyName: familyDoc?.familyName || "Unknown Family" }; showConfirmation( "Add Parent to Family", `Are you sure you want to add ${parentEmailToAdd} as a parent to family "${familyDoc?.familyName}"?`, async () => { await updateDoc(doc(db, usersCollectionPath, parentUserId), { familyRoles: arrayUnion(newRole) }); setFeedback(`${parentEmailToAdd} added as a parent to ${familyDoc?.familyName}.`); setParentEmailToAdd(''); } ); } catch (e) { console.error("Error adding parent to family:", e); setFormError("Failed to add parent. " + e.message); } }; return ( <Card><h3 className="text-2xl font-semibold text-gray-700 mb-6">Assign Parent to Family</h3>{formError && <p className="text-red-500 text-sm mb-3 p-2 bg-red-100 rounded">{formError}</p>}{feedback && <p className="text-green-500 text-sm mb-3 p-2 bg-green-100 rounded">{feedback}</p>}<SelectField label="Select Family" value={selectedFamilyId} onChange={e => setSelectedFamilyId(e.target.value)} options={familyOptions} placeholder="-- Choose a Family --" /><InputField label="Parent's Email Address" type="email" value={parentEmailToAdd} onChange={e => setParentEmailToAdd(e.target.value)} placeholder="parent@example.com" /><Button onClick={handleAddParentToFamily} className="bg-blue-500 hover:bg-blue-600" icon={UserPlus} disabled={!selectedFamilyId || !parentEmailToAdd}>Add Parent</Button>{selectedFamilyId && <div className="mt-6"><h4 className="text-lg font-medium text-gray-600">Current Parents in {families.find(f=>f.id === selectedFamilyId)?.familyName || ''}:</h4><p className="text-sm text-gray-500">(Displaying this list requires querying the 'users' collection based on familyRoles - TBD)</p></div>}</Card> );};
 
 // --- ParentDashboard (Moved SA Dash button into card, refactored Nav) ---
-const ParentDashboard = ({ user, familyId, kids, tasks, rewards, completedTasks, redeemedRewardsData, showConfirmation, allRewardsGlobal, switchToAdminViewFunc }) => { 
-    const [activeTab, setActiveTab] = useState('tasks'); 
+const ParentDashboard = ({ user, familyId, kids, tasks, rewards, completedTasks, redeemedRewardsData, showConfirmation, allRewardsGlobal, switchToAdminViewFunc }) => {
+    const [activeTab, setActiveTab] = useState('tasks');
     const [showMoreNav, setShowMoreNav] = useState(false);
 
-    const pendingTasks = completedTasks.filter(task => task.status === 'pending_approval'); 
-    const pendingFulfillmentRewards = redeemedRewardsData.filter(reward => reward.status === 'pending_fulfillment'); 
+    const pendingTasks = completedTasks.filter(task => task.status === 'pending_approval');
+    const pendingFulfillmentRewards = redeemedRewardsData.filter(reward => reward.status === 'pending_fulfillment');
 
     const mainNavItems = [
         { name: 'tasks', icon: ClipboardList, label: "Tasks" },
@@ -427,27 +520,27 @@ const ParentDashboard = ({ user, familyId, kids, tasks, rewards, completedTasks,
         { name: 'fulfillRewards', icon: PackageCheck, label: "Fulfill Rewards", count: pendingFulfillmentRewards.length },
         { name: 'history', icon: ListChecks, label: "History" },
     ];
-    
+
     const handleTabClick = (tabName, isFromMoreMenu = false) => {
         setActiveTab(tabName);
         if (isFromMoreMenu) {
             setShowMoreNav(false);
         }
     };
-    
-    const renderContent = () => { 
-        switch (activeTab) { 
-            case 'kids': return <ManageKids parentUser={user} familyId={familyId} kidsInFamily={kids} completedTasks={completedTasks} showConfirmation={showConfirmation} />; 
-            case 'tasks': return <ManageTasks familyId={familyId} tasksInFamily={tasks} kidsInFamily={kids} showConfirmation={showConfirmation} />; 
-            case 'rewards': return <ManageRewards familyId={familyId} rewardsInFamily={rewards} showConfirmation={showConfirmation} />; 
-            case 'approveTasks': return <ApproveTasks familyId={familyId} pendingTasks={pendingTasks} kidsInFamily={kids} allTasksInFamily={tasks} showConfirmation={showConfirmation} firebaseUser={user} />; 
-            case 'fulfillRewards': return <FulfillRewards familyId={familyId} pendingRewards={pendingFulfillmentRewards} kidsInFamily={kids} allRewardsList={rewards} showConfirmation={showConfirmation} firebaseUser={user} />; 
-            case 'history': return <ParentRewardHistory familyId={familyId} redeemedRewards={redeemedRewardsData} completedTasks={completedTasks} kidsInFamily={kids} rewardsInFamily={rewards} tasksInFamily={tasks} />; 
-            default: return <ManageTasks familyId={familyId} tasksInFamily={tasks} kidsInFamily={kids} showConfirmation={showConfirmation} />; 
-        } 
-    }; 
-    
-    return ( 
+
+    const renderContent = () => {
+        switch (activeTab) {
+            case 'kids': return <ManageKids parentUser={user} familyId={familyId} kidsInFamily={kids} completedTasks={completedTasks} showConfirmation={showConfirmation} />;
+            case 'tasks': return <ManageTasks familyId={familyId} tasksInFamily={tasks} kidsInFamily={kids} showConfirmation={showConfirmation} />;
+            case 'rewards': return <ManageRewards familyId={familyId} rewardsInFamily={rewards} showConfirmation={showConfirmation} />;
+            case 'approveTasks': return <ApproveTasks familyId={familyId} pendingTasks={pendingTasks} kidsInFamily={kids} allTasksInFamily={tasks} showConfirmation={showConfirmation} firebaseUser={user} />;
+            case 'fulfillRewards': return <FulfillRewards familyId={familyId} pendingRewards={pendingFulfillmentRewards} kidsInFamily={kids} allRewardsList={rewards} showConfirmation={showConfirmation} firebaseUser={user} />;
+            case 'history': return <ParentRewardHistory familyId={familyId} redeemedRewards={redeemedRewardsData} completedTasks={completedTasks} kidsInFamily={kids} rewardsInFamily={rewards} tasksInFamily={tasks} />;
+            default: return <ManageTasks familyId={familyId} tasksInFamily={tasks} kidsInFamily={kids} showConfirmation={showConfirmation} />;
+        }
+    };
+
+    return (
     <div className="space-y-6">
         <Card>
             <div className="flex flex-col sm:flex-row justify-between items-start">
@@ -456,9 +549,9 @@ const ParentDashboard = ({ user, familyId, kids, tasks, rewards, completedTasks,
                     <p className="text-gray-600 mt-1">Family: <span className="font-medium">{user.activeFamilyRole.familyName}</span></p>
                 </div>
                 {user.isSA && (
-                     <Button 
-                        onClick={switchToAdminViewFunc} 
-                        className="mt-2 sm:mt-0 bg-blue-500 hover:bg-blue-600 text-white text-sm py-1.5 px-3" 
+                     <Button
+                        onClick={switchToAdminViewFunc}
+                        className="mt-2 sm:mt-0 bg-blue-500 hover:bg-blue-600 text-white text-sm py-1.5 px-3"
                         icon={UserCog}
                     >
                         SA Dashboard
@@ -470,19 +563,19 @@ const ParentDashboard = ({ user, familyId, kids, tasks, rewards, completedTasks,
             <div className="flex flex-wrap gap-1 sm:gap-2">
                 {mainNavItems.map(item => (
                     <div key={item.name} className="flex-1 min-w-[80px] sm:min-w-0">
-                        <NavItemButton 
-                            tabName={item.name} 
-                            icon={item.icon} 
-                            label={item.label} 
-                            count={item.count} 
-                            currentActiveTab={activeTab} 
+                        <NavItemButton
+                            tabName={item.name}
+                            icon={item.icon}
+                            label={item.label}
+                            count={item.count}
+                            currentActiveTab={activeTab}
                             onTabClick={handleTabClick}
                         />
-                    </div> 
+                    </div>
                 ))}
                 <div className="relative flex-1 min-w-[80px] sm:min-w-0">
-                    <button 
-                        onClick={() => setShowMoreNav(!showMoreNav)} 
+                    <button
+                        onClick={() => setShowMoreNav(!showMoreNav)}
                         className={`flex items-center w-full text-left px-3 py-2 rounded-lg transition-colors duration-150 text-sm text-gray-600 hover:bg-purple-100 ${showMoreNav ? 'bg-purple-100' : ''}`}
                     >
                         <MoreHorizontal size={18} className="mr-2 flex-shrink-0" /> <span className="flex-grow">More</span>
@@ -490,15 +583,15 @@ const ParentDashboard = ({ user, familyId, kids, tasks, rewards, completedTasks,
                     {showMoreNav && (
                         <div className="absolute right-0 sm:left-0 mt-2 w-48 bg-white border border-gray-200 rounded-md shadow-lg z-10 py-1">
                             {moreNavItems.map(item => (
-                                <NavItemButton 
-                                    key={item.name} 
-                                    tabName={item.name} 
-                                    icon={item.icon} 
-                                    label={item.label} 
-                                    count={item.count} 
-                                    currentActiveTab={activeTab} 
+                                <NavItemButton
+                                    key={item.name}
+                                    tabName={item.name}
+                                    icon={item.icon}
+                                    label={item.label}
+                                    count={item.count}
+                                    currentActiveTab={activeTab}
                                     onTabClick={(tabName) => handleTabClick(tabName, true)} // Pass true for isMoreItem
-                                    isMoreItem={true} 
+                                    isMoreItem={true}
                                 />
                             ))}
                         </div>
@@ -507,13 +600,13 @@ const ParentDashboard = ({ user, familyId, kids, tasks, rewards, completedTasks,
             </div>
         </nav>
         <div>{renderContent()}</div>
-    </div>); 
+    </div>);
 };
 
 // New NavItemButton component (standalone)
 const NavItemButton = ({ tabName, icon: Icon, label, count, isMoreItem = false, currentActiveTab, onTabClick }) => {
     const isActive = currentActiveTab === tabName;
-    
+
     let buttonClasses = "flex items-center w-full text-left px-3 py-2 rounded-lg transition-colors duration-150 text-sm ";
     if (isActive) {
         buttonClasses += isMoreItem ? 'bg-purple-500 text-white' : 'bg-purple-600 text-white shadow-md';
@@ -522,11 +615,11 @@ const NavItemButton = ({ tabName, icon: Icon, label, count, isMoreItem = false, 
     }
 
     return (
-        <button 
-            onClick={() => onTabClick(tabName, isMoreItem)} 
+        <button
+            onClick={() => onTabClick(tabName, isMoreItem)}
             className={buttonClasses}
         >
-            <Icon size={18} className="mr-2 flex-shrink-0" /> 
+            <Icon size={18} className="mr-2 flex-shrink-0" />
             <span className="flex-grow">{label}</span>
             {count > 0 && <span className="ml-2 bg-red-500 text-white text-xs font-semibold px-1.5 py-0.5 rounded-full">{count}</span>}
         </button>
@@ -535,15 +628,15 @@ const NavItemButton = ({ tabName, icon: Icon, label, count, isMoreItem = false, 
 
 
 // --- ManageKids (Parent - Updated to display pending and total earned points) ---
-const ManageKids = ({ parentUser, familyId, kidsInFamily, completedTasks, showConfirmation }) => { 
-    const [isModalOpen, setIsModalOpen] = useState(false); const [kidName, setKidName] = useState(''); const [kidEmail, setKidEmail] = useState(''); const [editingKid, setEditingKid] = useState(null); const [formError, setFormError] = useState(''); 
-    const openAddModal = () => { setEditingKid(null); setKidName(''); setKidEmail(''); setFormError(''); setIsModalOpen(true); }; 
-    const openEditModal = (kid) => { setEditingKid(kid); setKidName(kid.name); setKidEmail(kid.email || ''); setFormError(''); setIsModalOpen(true); }; 
-    const handleSaveKid = async () => { if (!kidName.trim()) { setFormError('Kid name is required.'); return; } if (kidEmail.trim() && !/\S+@\S+\.\S+/.test(kidEmail.trim())) { setFormError('Please enter a valid email address or leave it blank.'); return; } setFormError(''); const kidData = { name: kidName.trim(), email: kidEmail.trim().toLowerCase() || null, points: editingKid ? (editingKid.points || 0) : 0, totalEarnedPoints: editingKid ? (editingKid.totalEarnedPoints || 0) : 0, familyId: familyId, }; try { const kidsPath = getFamilyScopedCollectionPath(familyId, 'kids'); if (editingKid) { await updateDoc(doc(db, kidsPath, editingKid.id), kidData); } else { kidData.createdAt = Timestamp.now(); kidData.addedByParentUid = parentUser.uid; const newKidRef = await addDoc(collection(db, kidsPath), kidData); if (kidData.email) { const userQuery = query(collection(db, usersCollectionPath), where("email", "==", kidData.email)); const userSnap = await getDocs(userQuery); let kidAuthUid; if (!userSnap.empty) { kidAuthUid = userSnap.docs[0].id; const kidUserDocRef = doc(db, usersCollectionPath, kidAuthUid); const kidUserDoc = await getDoc(kidUserDocRef); if (kidUserDoc.exists() && !kidUserDoc.data().familyRoles?.find(fr => fr.familyId === familyId && fr.role === 'kid')) { await updateDoc(kidUserDocRef, { familyRoles: arrayUnion({familyId: familyId, role: 'kid', familyName: parentUser.activeFamilyRole.familyName}) }); } } if (kidAuthUid) { await updateDoc(doc(db, kidsPath, newKidRef.id), { authUid: kidAuthUid }); } } } setIsModalOpen(false); } catch (error) { console.error("Error saving kid: ", error); setFormError('Failed to save kid. ' + error.message); } }; 
-    const confirmDeleteKid = (kid) => { showConfirmation( "Confirm Deletion", `Are you sure you want to delete kid "${kid.name}" from your family?`, () => handleDeleteKid(kid.id) ); }; 
-    const handleDeleteKid = async (kidId) => { if (!kidId) return; try { await deleteDoc(doc(db, getFamilyScopedCollectionPath(familyId, 'kids'), kidId)); } catch (error) { console.error("Error deleting kid: ", error); } }; 
-    
-    return ( 
+const ManageKids = ({ parentUser, familyId, kidsInFamily, completedTasks, showConfirmation }) => {
+    const [isModalOpen, setIsModalOpen] = useState(false); const [kidName, setKidName] = useState(''); const [kidEmail, setKidEmail] = useState(''); const [editingKid, setEditingKid] = useState(null); const [formError, setFormError] = useState('');
+    const openAddModal = () => { setEditingKid(null); setKidName(''); setKidEmail(''); setFormError(''); setIsModalOpen(true); };
+    const openEditModal = (kid) => { setEditingKid(kid); setKidName(kid.name); setKidEmail(kid.email || ''); setFormError(''); setIsModalOpen(true); };
+    const handleSaveKid = async () => { if (!kidName.trim()) { setFormError('Kid name is required.'); return; } if (kidEmail.trim() && !/\S+@\S+\.\S+/.test(kidEmail.trim())) { setFormError('Please enter a valid email address or leave it blank.'); return; } setFormError(''); const kidData = { name: kidName.trim(), email: kidEmail.trim().toLowerCase() || null, points: editingKid ? (editingKid.points || 0) : 0, totalEarnedPoints: editingKid ? (editingKid.totalEarnedPoints || 0) : 0, familyId: familyId, }; try { const kidsPath = getFamilyScopedCollectionPath(familyId, 'kids'); if (editingKid) { await updateDoc(doc(db, kidsPath, editingKid.id), kidData); } else { kidData.createdAt = Timestamp.now(); kidData.addedByParentUid = parentUser.uid; const newKidRef = await addDoc(collection(db, kidsPath), kidData); if (kidData.email) { const userQuery = query(collection(db, usersCollectionPath), where("email", "==", kidData.email)); const userSnap = await getDocs(userQuery); let kidAuthUid; if (!userSnap.empty) { kidAuthUid = userSnap.docs[0].id; const kidUserDocRef = doc(db, usersCollectionPath, kidAuthUid); const kidUserDoc = await getDoc(kidUserDocRef); if (kidUserDoc.exists() && !kidUserDoc.data().familyRoles?.find(fr => fr.familyId === familyId && fr.role === 'kid')) { await updateDoc(kidUserDocRef, { familyRoles: arrayUnion({familyId: familyId, role: 'kid', familyName: parentUser.activeFamilyRole.familyName}) }); } } if (kidAuthUid) { await updateDoc(doc(db, kidsPath, newKidRef.id), { authUid: kidAuthUid }); } } } setIsModalOpen(false); } catch (error) { console.error("Error saving kid: ", error); setFormError('Failed to save kid. ' + error.message); } };
+    const confirmDeleteKid = (kid) => { showConfirmation( "Confirm Deletion", `Are you sure you want to delete kid "${kid.name}" from your family?`, () => handleDeleteKid(kid.id) ); };
+    const handleDeleteKid = async (kidId) => { if (!kidId) return; try { await deleteDoc(doc(db, getFamilyScopedCollectionPath(familyId, 'kids'), kidId)); } catch (error) { console.error("Error deleting kid: ", error); } };
+
+    return (
         <Card>
             <div className="flex flex-col sm:flex-row justify-between items-center mb-6 gap-2">
                 <h3 className="text-2xl font-semibold text-gray-700">Kids in Family: {parentUser.activeFamilyRole.familyName}</h3>
@@ -583,10 +676,10 @@ const ManageKids = ({ parentUser, familyId, kidsInFamily, completedTasks, showCo
 };
 
 // --- ManageTasks (Parent - Updated sorting and Add button) ---
-const ManageTasks = ({ familyId, tasksInFamily, kidsInFamily, showConfirmation }) => { 
+const ManageTasks = ({ familyId, tasksInFamily, kidsInFamily, showConfirmation }) => {
     const [isModalOpen, setIsModalOpen] = useState(false); const [editingTask, setEditingTask] = useState(null); const [formError, setFormError] = useState('');
-    const [sortConfig, setSortConfig] = useState({ key: 'startDate', direction: 'ascending' }); 
-    const initialFormState = { name: '', points: '1', recurrenceType: 'none', daysOfWeek: [], startDate: new Date().toISOString().split('T')[0], customDueDate: '', assignedKidId: '' }; 
+    const [sortConfig, setSortConfig] = useState({ key: 'startDate', direction: 'ascending' });
+    const initialFormState = { name: '', points: '1', recurrenceType: 'none', daysOfWeek: [], startDate: new Date().toISOString().split('T')[0], customDueDate: '', assignedKidId: '' };
     const [formData, setFormData] = useState(initialFormState);
     const recurrenceOptions = [ { value: 'none', label: 'None (One-time or specific due date)' },{ value: 'daily', label: 'Daily' },{ value: 'weekly', label: 'Weekly' },{ value: 'monthly', label: 'Monthly (based on start date)' }];
     const kidOptions = [ { value: '', label: 'Unassigned (Any Kid)' }, ...kidsInFamily.map(k => ({ value: k.id, label: k.name }))];
@@ -596,30 +689,30 @@ const ManageTasks = ({ familyId, tasksInFamily, kidsInFamily, showConfirmation }
     const openEditModal = (task) => { setEditingTask(task); setFormData({ name: task.name, points: task.points.toString(), recurrenceType: task.recurrenceType || 'none', daysOfWeek: task.daysOfWeek || [], startDate: task.startDate ? new Date(task.startDate + 'T00:00:00').toISOString().split('T')[0] : new Date().toISOString().split('T')[0], customDueDate: task.customDueDate ? new Date(task.customDueDate + 'T00:00:00').toISOString().split('T')[0] : '', assignedKidId: task.assignedKidId || '', }); setFormError(''); setIsModalOpen(true); };
     const handleSaveTask = async () => { if (!formData.name.trim() || !formData.points || isNaN(parseInt(formData.points)) || parseInt(formData.points) <= 0) { setFormError('Task name and a positive point value are required.'); return; } if (formData.recurrenceType === 'weekly' && formData.daysOfWeek.length === 0) { setFormError('Please select at least one day for weekly recurrence.'); return; } if (!formData.startDate) { setFormError('Start date is required.'); return; } if (formData.recurrenceType === 'none' && !formData.customDueDate) { setFormError('For non-recurring tasks, a specific Due Date is required.'); return; } if (formData.customDueDate && new Date(formData.customDueDate) < new Date(formData.startDate)) { setFormError('Due date cannot be before start date.'); return; } setFormError(''); const taskData = { name: formData.name.trim(), points: parseInt(formData.points), recurrenceType: formData.recurrenceType, daysOfWeek: formData.recurrenceType === 'weekly' ? formData.daysOfWeek : [], startDate: formData.startDate, customDueDate: formData.recurrenceType === 'none' && formData.customDueDate ? formData.customDueDate : null, assignedKidId: formData.assignedKidId || null, isActive: true, }; const baseDateForCalc = taskData.recurrenceType === 'none' ? new Date(taskData.customDueDate) : new Date(taskData.startDate); taskData.nextDueDate = calculateNextDueDate({ ...taskData }, baseDateForCalc); try { const tasksPath = getFamilyScopedCollectionPath(familyId, 'tasks'); if (editingTask) { await updateDoc(doc(db, tasksPath, editingTask.id), taskData); }  else { taskData.createdAt = Timestamp.now(); await addDoc(collection(db, tasksPath), taskData); } setIsModalOpen(false); } catch (error) { console.error("Error saving task: ", error); setFormError(`Failed to save task: ${error.message}`); } };
     const [taskToDelete, setTaskToDelete] = useState(null); const confirmDeleteTask = (task) => { setTaskToDelete(task); showConfirmation("Confirm Deletion", `Are you sure you want to delete task "${task.name}"?`, () => handleDeleteTask(task.id)); }; const handleDeleteTask = async (taskId) => { if(!taskId) return; try { await deleteDoc(doc(db, getFamilyScopedCollectionPath(familyId, 'tasks'), taskId)); setTaskToDelete(null); } catch (error) { console.error("Error deleting task: ", error); setTaskToDelete(null); } };
-    const sortedTasks = useMemo(() => { 
-        let sortableItems = [...tasksInFamily]; 
-        if (sortConfig.key !== null) { 
-            sortableItems.sort((a, b) => { 
+    const sortedTasks = useMemo(() => {
+        let sortableItems = [...tasksInFamily];
+        if (sortConfig.key !== null) {
+            sortableItems.sort((a, b) => {
                 let valA = a[sortConfig.key];
                 let valB = b[sortConfig.key];
-                if (sortConfig.key === 'startDate') { 
+                if (sortConfig.key === 'startDate') {
                     valA = new Date(valA).getTime();
                     valB = new Date(valB).getTime();
                 }
-                if (valA < valB) return sortConfig.direction === 'ascending' ? -1 : 1; 
-                if (valA > valB) return sortConfig.direction === 'ascending' ? 1 : -1; 
-                return 0; 
-            }); 
-        } 
-        return sortableItems; 
+                if (valA < valB) return sortConfig.direction === 'ascending' ? -1 : 1;
+                if (valA > valB) return sortConfig.direction === 'ascending' ? 1 : -1;
+                return 0;
+            });
+        }
+        return sortableItems;
     }, [tasksInFamily, sortConfig]);
     const requestSort = (key) => { let direction = 'ascending'; if (sortConfig.key === key && sortConfig.direction === 'ascending') { direction = 'descending'; } setSortConfig({ key, direction }); };
     const getSortIcon = (key) => { if (sortConfig.key !== key) return <ChevronsUpDown size={16} className="ml-1 opacity-40" />; return sortConfig.direction === 'ascending' ? <ArrowUpCircle size={16} className="ml-1" /> : <ArrowDownCircle size={16} className="ml-1" />; };
-    return ( 
+    return (
         <Card>
             <div className="flex flex-col sm:flex-row justify-between items-center mb-6 gap-2">
                 <h3 className="text-2xl font-semibold text-gray-700">Tasks</h3>
-                <div className="flex flex-wrap items-center gap-1 sm:gap-2"> 
+                <div className="flex flex-wrap items-center gap-1 sm:gap-2">
                     <Button onClick={() => requestSort('startDate')} className="bg-gray-200 hover:bg-gray-300 text-gray-700 px-2 sm:px-3 py-1 text-xs sm:text-sm" icon={null}>Start Date {getSortIcon('startDate')}</Button>
                     <Button onClick={() => requestSort('points')} className="bg-gray-200 hover:bg-gray-300 text-gray-700 px-2 sm:px-3 py-1 text-xs sm:text-sm" icon={null}>Points {getSortIcon('points')}</Button>
                     <Button onClick={openAddModal} className="bg-teal-500 hover:bg-teal-600 text-xs sm:text-sm px-3 py-1.5" icon={PlusCircle}>
@@ -635,21 +728,21 @@ const ManageTasks = ({ familyId, tasksInFamily, kidsInFamily, showConfirmation }
 };
 
 // --- ManageRewards (Parent - Updated sorting and Add button) ---
-const ManageRewards = ({ familyId, rewardsInFamily, showConfirmation }) => { 
-    const [isModalOpen, setIsModalOpen] = useState(false); const [rewardName, setRewardName] = useState(''); const [rewardCost, setRewardCost] = useState(''); const [formError, setFormError] = useState(''); 
-    const [sortConfig, setSortConfig] = useState({ key: 'pointCost', direction: 'descending' }); 
-    const handleAddReward = async () => { setFormError(''); if (!rewardName.trim() || !rewardCost || isNaN(parseInt(rewardCost)) || parseInt(rewardCost) <= 0) { setFormError("Reward name and a positive point cost are required."); return; } try { await addDoc(collection(db, getFamilyScopedCollectionPath(familyId, 'rewards')), { name: rewardName.trim(), pointCost: parseInt(rewardCost), isAvailable: true, createdAt: Timestamp.now() }); setRewardName(''); setRewardCost(''); setIsModalOpen(false); } catch (error) { console.error("Error adding reward: ", error); setFormError("Failed to add reward."); } }; 
-    const [rewardToDelete, setRewardToDelete] = useState(null); 
-    const confirmDeleteReward = (reward) => { setRewardToDelete(reward); showConfirmation("Confirm Deletion", `Are you sure you want to delete reward "${reward.name}"?`, () => handleDeleteReward(reward.id)); }; 
-    const handleDeleteReward = async (rewardId) => { if(!rewardId) return; try { await deleteDoc(doc(db, getFamilyScopedCollectionPath(familyId, 'rewards'), rewardId)); setRewardToDelete(null); } catch (error) { console.error("Error deleting reward: ", error); setRewardToDelete(null); } }; 
-    const sortedRewards = useMemo(() => { let sortableItems = [...rewardsInFamily]; if (sortConfig.key) { sortableItems.sort((a, b) => { let valA = a[sortConfig.key]; let valB = b[sortConfig.key]; if (sortConfig.key === 'createdAt' && valA?.toDate && valB?.toDate) { valA = valA.toMillis(); valB = valB.toMillis(); } if (valA < valB) return sortConfig.direction === 'ascending' ? -1 : 1; if (valA > valB) return sortConfig.direction === 'ascending' ? 1 : -1; return 0; }); } return sortableItems; }, [rewardsInFamily, sortConfig]); 
-    const requestSort = (key) => { let direction = 'ascending'; if (sortConfig.key === key && sortConfig.direction === 'ascending') { direction = 'descending'; } else if (sortConfig.key === key && sortConfig.direction === 'descending') { direction = 'ascending';} setSortConfig({ key, direction }); }; 
-    const getSortIcon = (key) => { if (sortConfig.key !== key) return <ChevronsUpDown size={16} className="ml-1 opacity-40" />; return sortConfig.direction === 'ascending' ? <ArrowUpCircle size={16} className="ml-1" /> : <ArrowDownCircle size={16} className="ml-1" />; }; 
-    return ( 
+const ManageRewards = ({ familyId, rewardsInFamily, showConfirmation }) => {
+    const [isModalOpen, setIsModalOpen] = useState(false); const [rewardName, setRewardName] = useState(''); const [rewardCost, setRewardCost] = useState(''); const [formError, setFormError] = useState('');
+    const [sortConfig, setSortConfig] = useState({ key: 'pointCost', direction: 'descending' });
+    const handleAddReward = async () => { setFormError(''); if (!rewardName.trim() || !rewardCost || isNaN(parseInt(rewardCost)) || parseInt(rewardCost) <= 0) { setFormError("Reward name and a positive point cost are required."); return; } try { await addDoc(collection(db, getFamilyScopedCollectionPath(familyId, 'rewards')), { name: rewardName.trim(), pointCost: parseInt(rewardCost), isAvailable: true, createdAt: Timestamp.now() }); setRewardName(''); setRewardCost(''); setIsModalOpen(false); } catch (error) { console.error("Error adding reward: ", error); setFormError("Failed to add reward."); } };
+    const [rewardToDelete, setRewardToDelete] = useState(null);
+    const confirmDeleteReward = (reward) => { setRewardToDelete(reward); showConfirmation("Confirm Deletion", `Are you sure you want to delete reward "${reward.name}"?`, () => handleDeleteReward(reward.id)); };
+    const handleDeleteReward = async (rewardId) => { if(!rewardId) return; try { await deleteDoc(doc(db, getFamilyScopedCollectionPath(familyId, 'rewards'), rewardId)); setRewardToDelete(null); } catch (error) { console.error("Error deleting reward: ", error); setRewardToDelete(null); } };
+    const sortedRewards = useMemo(() => { let sortableItems = [...rewardsInFamily]; if (sortConfig.key) { sortableItems.sort((a, b) => { let valA = a[sortConfig.key]; let valB = b[sortConfig.key]; if (sortConfig.key === 'createdAt' && valA?.toDate && valB?.toDate) { valA = valA.toMillis(); valB = valB.toMillis(); } if (valA < valB) return sortConfig.direction === 'ascending' ? -1 : 1; if (valA > valB) return sortConfig.direction === 'ascending' ? 1 : -1; return 0; }); } return sortableItems; }, [rewardsInFamily, sortConfig]);
+    const requestSort = (key) => { let direction = 'ascending'; if (sortConfig.key === key && sortConfig.direction === 'ascending') { direction = 'descending'; } else if (sortConfig.key === key && sortConfig.direction === 'descending') { direction = 'ascending';} setSortConfig({ key, direction }); };
+    const getSortIcon = (key) => { if (sortConfig.key !== key) return <ChevronsUpDown size={16} className="ml-1 opacity-40" />; return sortConfig.direction === 'ascending' ? <ArrowUpCircle size={16} className="ml-1" /> : <ArrowDownCircle size={16} className="ml-1" />; };
+    return (
         <Card>
             <div className="flex flex-col sm:flex-row justify-between items-center mb-6 gap-2">
                 <h3 className="text-2xl font-semibold text-gray-700">Rewards</h3>
-                <div className="flex flex-wrap items-center gap-1 sm:gap-2"> 
+                <div className="flex flex-wrap items-center gap-1 sm:gap-2">
                     <Button onClick={() => requestSort('name')} className="bg-gray-200 hover:bg-gray-300 text-gray-700 px-2 sm:px-3 py-1 text-xs sm:text-sm" icon={null}>Name {getSortIcon('name')}</Button>
                     <Button onClick={() => requestSort('pointCost')} className="bg-gray-200 hover:bg-gray-300 text-gray-700 px-2 sm:px-3 py-1 text-xs sm:text-sm" icon={null}>Points {getSortIcon('pointCost')}</Button>
                     <Button onClick={() => {setIsModalOpen(true); setFormError('');}} className="bg-yellow-500 hover:bg-yellow-600 text-xs sm:text-sm px-3 py-1.5" icon={PlusCircle}>
@@ -665,46 +758,46 @@ const ManageRewards = ({ familyId, rewardsInFamily, showConfirmation }) => {
 };
 
 // --- ApproveTasks (Parent - Updated to include totalEarnedPoints) ---
-const ApproveTasks = ({ familyId, pendingTasks, kidsInFamily, allTasksInFamily, showConfirmation, firebaseUser }) => { 
-    const [approvalNote, setApprovalNote] = useState(''); const [currentTaskForApproval, setCurrentTaskForApproval] = useState(null); const [pointsToAdjust, setPointsToAdjust] = useState(0); const [reopenTaskFlag, setReopenTaskFlag] = useState(true); 
-    const openApprovalModal = (completedTask) => { setCurrentTaskForApproval(completedTask); setPointsToAdjust(completedTask.taskPoints); setApprovalNote(''); setReopenTaskFlag(true); }; 
-    const closeApprovalModal = () => { setCurrentTaskForApproval(null); setApprovalNote(''); setPointsToAdjust(0); setReopenTaskFlag(false); }; 
-    const handleConfirmApprovalAction = (status) => { const actionText = status === 'approved' ? 'approve' : (reopenTaskFlag ? 'reject and reopen' : 'reject'); const title = status === 'approved' ? 'Confirm Approval' : 'Confirm Rejection'; showConfirmation( title, `Are you sure you want to ${actionText} this task submission for "${currentTaskForApproval?.taskName}"?`, () => processApprovalAction(status) ); }; 
-    const processApprovalAction = async (status) => {  
-        if (!currentTaskForApproval) return; 
-        try { 
-            const kidRef = doc(db, getFamilyScopedCollectionPath(familyId, 'kids'), currentTaskForApproval.kidId); 
-            const completedTaskRef = doc(db, getFamilyScopedCollectionPath(familyId, 'completedTasks'), currentTaskForApproval.id); 
-            const mainTaskRef = doc(db, getFamilyScopedCollectionPath(familyId, 'tasks'), currentTaskForApproval.taskId); 
-            const kidDoc = await getDoc(kidRef); 
-            const mainTaskDoc = await getDoc(mainTaskRef); 
-            if (!kidDoc.exists() || !mainTaskDoc.exists()) { console.error("Kid or Task document not found"); return; } 
-            
-            const currentKidData = kidDoc.data();
-            const currentKidPoints = currentKidData.points || 0; 
-            const currentTotalEarned = currentKidData.totalEarnedPoints || 0; 
+const ApproveTasks = ({ familyId, pendingTasks, kidsInFamily, allTasksInFamily, showConfirmation, firebaseUser }) => {
+    const [approvalNote, setApprovalNote] = useState(''); const [currentTaskForApproval, setCurrentTaskForApproval] = useState(null); const [pointsToAdjust, setPointsToAdjust] = useState(0); const [reopenTaskFlag, setReopenTaskFlag] = useState(true);
+    const openApprovalModal = (completedTask) => { setCurrentTaskForApproval(completedTask); setPointsToAdjust(completedTask.taskPoints); setApprovalNote(''); setReopenTaskFlag(true); };
+    const closeApprovalModal = () => { setCurrentTaskForApproval(null); setApprovalNote(''); setPointsToAdjust(0); setReopenTaskFlag(false); };
+    const handleConfirmApprovalAction = (status) => { const actionText = status === 'approved' ? 'approve' : (reopenTaskFlag ? 'reject and reopen' : 'reject'); const title = status === 'approved' ? 'Confirm Approval' : 'Confirm Rejection'; showConfirmation( title, `Are you sure you want to ${actionText} this task submission for "${currentTaskForApproval?.taskName}"?`, () => processApprovalAction(status) ); };
+    const processApprovalAction = async (status) => {
+        if (!currentTaskForApproval) return;
+        try {
+            const kidRef = doc(db, getFamilyScopedCollectionPath(familyId, 'kids'), currentTaskForApproval.kidId);
+            const completedTaskRef = doc(db, getFamilyScopedCollectionPath(familyId, 'completedTasks'), currentTaskForApproval.id);
+            const mainTaskRef = doc(db, getFamilyScopedCollectionPath(familyId, 'tasks'), currentTaskForApproval.taskId);
+            const kidDoc = await getDoc(kidRef);
+            const mainTaskDoc = await getDoc(mainTaskRef);
+            if (!kidDoc.exists() || !mainTaskDoc.exists()) { console.error("Kid or Task document not found"); return; }
 
-            const mainTaskData = mainTaskDoc.data(); 
-            const batch = writeBatch(db); 
-            const approverInfo = firebaseUser ? (firebaseUser.displayName || firebaseUser.email || firebaseUser.uid) : 'System'; 
-            
-            if (status === 'rejected' && reopenTaskFlag) { batch.delete(completedTaskRef); } 
-            else { 
-                const updateData = { status: status, approvalNote: approvalNote.trim() || null, dateApprovedOrRejected: Timestamp.now(), pointsAwarded: status === 'approved' ? pointsToAdjust : 0, processedBy: approverInfo }; 
-                batch.update(completedTaskRef, updateData); 
-                if (status === 'approved') { 
-                    batch.update(kidRef, { 
+            const currentKidData = kidDoc.data();
+            const currentKidPoints = currentKidData.points || 0;
+            const currentTotalEarned = currentKidData.totalEarnedPoints || 0;
+
+            const mainTaskData = mainTaskDoc.data();
+            const batch = writeBatch(db);
+            const approverInfo = firebaseUser ? (firebaseUser.displayName || firebaseUser.email || firebaseUser.uid) : 'System';
+
+            if (status === 'rejected' && reopenTaskFlag) { batch.delete(completedTaskRef); }
+            else {
+                const updateData = { status: status, approvalNote: approvalNote.trim() || null, dateApprovedOrRejected: Timestamp.now(), pointsAwarded: status === 'approved' ? pointsToAdjust : 0, processedBy: approverInfo };
+                batch.update(completedTaskRef, updateData);
+                if (status === 'approved') {
+                    batch.update(kidRef, {
                         points: currentKidPoints + pointsToAdjust,
-                        totalEarnedPoints: currentTotalEarned + pointsToAdjust 
-                    }); 
-                } 
-            } 
-            if (status === 'approved' && mainTaskData.recurrenceType && mainTaskData.recurrenceType !== 'none') { const newNextDueDate = calculateNextDueDate({ ...mainTaskData, startDate: new Date(mainTaskData.startDate), customDueDate: mainTaskData.customDueDate ? new Date(mainTaskData.customDueDate) : null, nextDueDate: currentTaskForApproval.taskDueDate }, currentTaskForApproval.taskDueDate.toDate()); if (newNextDueDate) { batch.update(mainTaskRef, { nextDueDate: newNextDueDate }); } } 
-            await batch.commit(); 
-            closeApprovalModal(); 
-        } catch (error) { console.error(`Error ${status} task: `, error); } 
-    }; 
-    if (pendingTasks.length === 0) { return <Card><h3 className="text-2xl font-semibold text-gray-700 mb-6">Approve Tasks</h3><p className="text-gray-500">No tasks pending approval.</p></Card>; } 
+                        totalEarnedPoints: currentTotalEarned + pointsToAdjust
+                    });
+                }
+            }
+            if (status === 'approved' && mainTaskData.recurrenceType && mainTaskData.recurrenceType !== 'none') { const newNextDueDate = calculateNextDueDate({ ...mainTaskData, startDate: new Date(mainTaskData.startDate), customDueDate: mainTaskData.customDueDate ? new Date(mainTaskData.customDueDate) : null, nextDueDate: currentTaskForApproval.taskDueDate }, currentTaskForApproval.taskDueDate.toDate()); if (newNextDueDate) { batch.update(mainTaskRef, { nextDueDate: newNextDueDate }); } }
+            await batch.commit();
+            closeApprovalModal();
+        } catch (error) { console.error(`Error ${status} task: `, error); }
+    };
+    if (pendingTasks.length === 0) { return <Card><h3 className="text-2xl font-semibold text-gray-700 mb-6">Approve Tasks</h3><p className="text-gray-500">No tasks pending approval.</p></Card>; }
     return ( <Card><h3 className="text-2xl font-semibold text-gray-700 mb-6">Approve Tasks</h3><ul className="space-y-4">{pendingTasks.map(ct => { const kid = kidsInFamily.find(k => k.id === ct.kidId); if (!kid) return <li key={ct.id} className="text-red-500 p-3 bg-red-50 rounded-md">Kid data missing.</li>; return (<li key={ct.id} className="p-4 bg-gray-50 rounded-lg shadow-sm flex flex-col sm:flex-row justify-between items-start sm:items-center"><div className="mb-2 sm:mb-0"><p className="font-semibold text-lg text-gray-800">{kid.name} completed: <span className="text-blue-600">{ct.taskName}</span></p><p className="text-sm text-gray-500">Submitted: {ct.dateSubmitted?.toDate().toLocaleDateString()}</p><p className="text-sm text-gray-500">Originally Due: {ct.taskDueDate?.toDate().toLocaleDateString()}</p><p className="text-sm text-purple-600 font-semibold">Original Points: {ct.taskPoints}</p></div><Button onClick={() => openApprovalModal(ct)} className="bg-indigo-500 hover:bg-indigo-600" icon={Edit3}>Review</Button></li>);})}</ul><Modal isOpen={!!currentTaskForApproval} onClose={closeApprovalModal} title={`Review Task: ${currentTaskForApproval?.taskName}`}>{currentTaskForApproval && (<div><p><strong>Kid:</strong> {kidsInFamily.find(k => k.id === currentTaskForApproval.kidId)?.name}</p><p><strong>Submitted:</strong> {currentTaskForApproval.dateSubmitted?.toDate().toLocaleString()}</p><p><strong>Original Due:</strong> {currentTaskForApproval.taskDueDate?.toDate().toLocaleDateString()}</p><div className="my-4"><label className="block text-sm font-medium text-gray-700 mb-1">Adjust Points (Original: {currentTaskForApproval.taskPoints})</label><div className="flex items-center space-x-2"><Button onClick={() => setPointsToAdjust(p => Math.max(0, p - 1))} icon={ArrowDownCircle} className="bg-red-500 hover:bg-red-600 px-2 py-1"/><input type="number" value={pointsToAdjust} onChange={e => setPointsToAdjust(Math.max(0, parseInt(e.target.value) || 0))} className="w-20 text-center px-2 py-1 border border-gray-300 rounded-md"/><Button onClick={() => setPointsToAdjust(p => p + 1)} icon={ArrowUpCircle} className="bg-green-500 hover:bg-green-600 px-2 py-1"/></div></div><TextAreaField label="Approval/Rejection Note (Optional)" value={approvalNote} onChange={e => setApprovalNote(e.target.value)} placeholder="e.g., Great job!" /><div className="mt-4 mb-2"><label className="flex items-center text-sm text-gray-600"><input type="checkbox" checked={reopenTaskFlag} onChange={(e) => setReopenTaskFlag(e.target.checked)} className="mr-2 h-4 w-4 text-indigo-600 border-gray-300 rounded focus:ring-indigo-500" />If rejecting, reopen task for kid to resubmit?</label></div><div className="flex justify-end space-x-3 mt-6"><Button onClick={() => handleConfirmApprovalAction('rejected')} className="bg-red-500 hover:bg-red-600" icon={ThumbsDown}>{reopenTaskFlag ? "Reject & Reopen" : "Reject Only"}</Button><Button onClick={() => handleConfirmApprovalAction('approved')} className="bg-green-500 hover:bg-green-600" icon={ThumbsUp}>Approve</Button></div></div>)}</Modal></Card>);};
 
 // --- FulfillRewards (Parent - Unchanged) ---
