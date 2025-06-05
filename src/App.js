@@ -50,7 +50,7 @@ const firebaseConfig = typeof __firebase_config !== 'undefined'
 
 const currentAppId = typeof __app_id !== 'undefined' 
     ? __app_id
-    : (process.env.REACT_APP_CHORE_APP_ID || 'kid-rewards-app-multifamily-v3'); // Updated version name
+    : (process.env.REACT_APP_CHORE_APP_ID || 'kid-rewards-app-multifamily-v3'); 
 
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
@@ -119,44 +119,52 @@ function App() {
         const unsubscribe = onAuthStateChanged(auth, async (user) => {
             setIsLoading(true);
             setErrorState(''); 
-            setFirebaseAuthUser(user); // This is the raw Firebase auth user
+            setFirebaseAuthUser(user); 
 
-            if (user) { // User is signed in (Google or Anonymous)
+            if (user) {
                 const userDocRef = doc(db, usersCollectionPath, user.uid);
                 let userDocSnap;
                 try { userDocSnap = await getDoc(userDocRef); } 
                 catch (e) { setError("Failed to fetch user profile."); setIsLoading(false); setIsAuthReady(true); return; }
 
-                const isSA = SYSTEM_ADMIN_EMAILS.includes(user.email?.toLowerCase() || '');
+                const currentIsSA = SYSTEM_ADMIN_EMAILS.includes(user.email?.toLowerCase() || '');
+                
+                let storedProfileData = {};
+                if (userDocSnap.exists()) {
+                    storedProfileData = userDocSnap.data();
+                }
 
-                console.log("System Admin Emails:", SYSTEM_ADMIN_EMAILS);
-                console.log("Current User Email:", user.email?.toLowerCase());
-                console.log("Is User SA?", isSA);
-
+                // Base profile data always derived from current auth state and config
                 let userProfileData = {
-                    uid: user.uid, email: user.email, displayName: user.displayName,
-                    isSA: isSA, familyRoles: [], activeFamilyRole: null,
-                    defaultFamilyDataMigrated: false, // Initialize migration flag
+                    uid: user.uid,
+                    email: user.email,
+                    displayName: user.displayName,
+                    isSA: currentIsSA, // Authoritative SA status from config
+                    familyRoles: storedProfileData.familyRoles || [],
+                    activeFamilyRole: storedProfileData.activeFamilyRole || null,
+                    defaultFamilyDataMigrated: storedProfileData.defaultFamilyDataMigrated || false,
                 };
-
-                if (userDocSnap.exists()) { userProfileData = { ...userProfileData, ...userDocSnap.data() }; } 
-                else { // New user (first ever login or first login to this app version)
+                
+                // Create or update the user document in Firestore
+                if (!userDocSnap.exists()) {
                     await setDoc(userDocRef, { 
-                        uid: user.uid, email: user.email, displayName: user.displayName, 
-                        isSA: isSA, familyRoles: [], createdAt: Timestamp.now(),
-                        defaultFamilyDataMigrated: false
+                        ...userProfileData, // Save the freshly determined profile
+                        createdAt: Timestamp.now() 
                     });
+                } else if (storedProfileData.isSA !== currentIsSA) {
+                    // If stored SA status differs from current config, update it
+                    await updateDoc(userDocRef, { isSA: currentIsSA });
                 }
                 
-                // Auto-create default family for SA if they are SA and have no parent roles
-                if (isSA && (!userProfileData.familyRoles || userProfileData.familyRoles.filter(r => r.role === 'parent').length === 0)) {
+                // Auto-create default family for SA if needed
+                if (userProfileData.isSA && (!userProfileData.familyRoles || userProfileData.familyRoles.filter(r => r.role === 'parent').length === 0)) {
                     const defaultFamilyName = `${userProfileData.displayName || 'Admin'}'s Default Family`;
                     try {
                         const newFamilyRef = await addDoc(collection(db, familiesCollectionPath), {
                             familyName: defaultFamilyName,
                             createdAt: Timestamp.now(),
                             createdBy: user.uid,
-                            saDefaultFamily: true, // Mark it as an SA's auto-created default
+                            saDefaultFamily: true,
                         });
                         const defaultFamilyId = newFamilyRef.id;
                         const newParentRole = { familyId: defaultFamilyId, role: 'parent', familyName: defaultFamilyName };
@@ -165,54 +173,57 @@ function App() {
                         if (!userProfileData.defaultFamilyDataMigrated) {
                             migrationSuccessful = await migrateDataToFamily(defaultFamilyId, user.uid, userProfileData.displayName, setError);
                         }
-
-                        await updateDoc(userDocRef, {
-                            familyRoles: arrayUnion(newParentRole),
-                            activeFamilyRole: newParentRole, // Set as active
+                        // Update both local and Firestore user doc
+                        const updatedRoles = [...userProfileData.familyRoles, newParentRole];
+                        await updateDoc(userDocRef, { 
+                            familyRoles: updatedRoles, 
+                            activeFamilyRole: newParentRole, 
                             defaultFamilyDataMigrated: userProfileData.defaultFamilyDataMigrated || migrationSuccessful,
                         });
-                        // Update local userProfileData immediately
-                        userProfileData.familyRoles.push(newParentRole);
+                        userProfileData.familyRoles = updatedRoles;
                         userProfileData.activeFamilyRole = newParentRole;
                         userProfileData.defaultFamilyDataMigrated = userProfileData.defaultFamilyDataMigrated || migrationSuccessful;
                     } catch (famError) { setError("Could not set up default family. " + famError.message); }
                 }
                 
-                // Denormalize familyName into familyRoles for easier display
+                // Denormalize familyName into familyRoles for easier display if not already present
                 if (userProfileData.familyRoles && userProfileData.familyRoles.length > 0) {
                     const rolesWithNames = await Promise.all(userProfileData.familyRoles.map(async (fr) => {
-                        // Avoid fetching familyName if it's already there (e.g., from newParentRole object)
-                        if (fr.familyName) return fr;
+                        if (fr.familyName && fr.familyName !== "Unknown Family") return fr; // Already has a good name
                         const familyDoc = await getDoc(doc(db, familiesCollectionPath, fr.familyId));
                         return {...fr, familyName: familyDoc.exists() ? familyDoc.data().familyName : "Unknown Family"};
                     }));
                     userProfileData.familyRoles = rolesWithNames;
 
                     // Ensure activeFamilyRole also has familyName, if it was set from a role without it
-                    if (userProfileData.activeFamilyRole && !userProfileData.activeFamilyRole.familyName) {
+                    // Or default to first if activeFamilyRole is not set or invalid
+                    if (userProfileData.activeFamilyRole) {
                         const activeRoleDetails = rolesWithNames.find(r => r.familyId === userProfileData.activeFamilyRole.familyId && r.role === userProfileData.activeFamilyRole.role);
-                        if (activeRoleDetails) userProfileData.activeFamilyRole = activeRoleDetails;
-                    } else if (rolesWithNames.length > 0 && !userProfileData.activeFamilyRole) { // Default to first if not set
+                        if (activeRoleDetails) {
+                            userProfileData.activeFamilyRole = activeRoleDetails;
+                        } else if (rolesWithNames.length > 0) { // Active role invalid, default to first
+                             userProfileData.activeFamilyRole = rolesWithNames[0];
+                        } else { // No valid roles, clear active role
+                            userProfileData.activeFamilyRole = null;
+                        }
+                    } else if (rolesWithNames.length > 0) { // No active role set, default to first
                         userProfileData.activeFamilyRole = rolesWithNames[0];
                     }
                 }
-                setLoggedInUser(userProfileData); // This is the app-specific user profile
+                setLoggedInUser(userProfileData);
 
-            } else { // No Firebase user is signed in (user is null)
-                setLoggedInUser(null); // Clear app-specific profile
-                 try { // Attempt to establish a baseline anonymous session
-                    if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-                        await signInWithCustomToken(auth, __initial_auth_token);
-                    } else { 
-                        await signInAnonymously(auth); // This will re-trigger onAuthStateChanged with an anonymous user
-                    }
+            } else { 
+                setLoggedInUser(null); 
+                 try {
+                    if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) { await signInWithCustomToken(auth, __initial_auth_token); } 
+                    else { await signInAnonymously(auth); }
                 } catch (authError) { setError("Failed to initialize a base session."); }
             }
             setIsAuthReady(true);
             setIsLoading(false); 
         });
         return () => unsubscribe();
-    }, []); // setError is stable, no need to add as dependency
+    }, []); 
 
 
     useEffect(() => {
@@ -237,10 +248,10 @@ function App() {
             });
         } else { setKids([]); setTasks([]); setRewards([]); setCompletedTasks([]); setRedeemedRewardsData([]); }
         setIsLoading(false); return () => unsubscribes.forEach(unsub => unsub());
-    }, [isAuthReady, firebaseAuthUser, loggedInUser]); // setError is stable
+    }, [isAuthReady, firebaseAuthUser, loggedInUser]);
 
     const handleLoginWithGoogle = async () => { const provider = new GoogleAuthProvider(); try { setErrorState(''); await signInWithPopup(auth, provider); } catch (googleAuthError) { if (googleAuthError.code !== 'auth/popup-closed-by-user') { setError("Failed to sign in with Google."); }}};
-    const handleLogout = async () => { try { await signOut(auth); setLoggedInUser(null); /* onAuthStateChanged will handle anonymous sign-in */ } catch (logoutError) { setError("Failed to sign out."); }};
+    const handleLogout = async () => { try { await signOut(auth); setLoggedInUser(null); } catch (logoutError) { setError("Failed to sign out."); }};
 
     const switchToAdminView = () => { if (loggedInUser?.isSA) { setLoggedInUser(prev => ({ ...prev, activeFamilyRole: null })); } };
     const switchToFamilyView = (familyRole) => { setLoggedInUser(prev => ({ ...prev, activeFamilyRole: familyRole })); };
@@ -248,16 +259,11 @@ function App() {
     if (!isAuthReady || isLoading) { return <div className="flex items-center justify-center min-h-screen bg-gray-100"><div className="text-xl font-semibold">Initializing App & Loading Data...</div></div>; }
     if (error) { return <div className="flex flex-col items-center justify-center min-h-screen bg-gray-100 p-4"><div className="text-xl font-semibold text-red-500 p-4 bg-red-100 rounded-md mb-4">{error}</div><Button onClick={() => {setErrorState(''); window.location.reload();}} className="bg-blue-500 hover:bg-blue-600">Try Again</Button></div>; }
     
-    // Show Login Screen if:
-    // 1. No Firebase Auth user AT ALL (firebaseAuthUser is null). This is the primary logged-out state.
-    // 2. OR, there IS a Firebase Auth user, but they are anonymous, AND they don't have a specific app role (not SA, no active family role).
-    //    This prevents showing role-specific dashboards to a generic anonymous session.
     if (!firebaseAuthUser || (firebaseAuthUser.isAnonymous && (!loggedInUser || (!loggedInUser.isSA && !loggedInUser.activeFamilyRole)))) {
         return ( <div className="min-h-screen bg-gradient-to-br from-purple-600 to-blue-500 flex flex-col items-center justify-center p-4"><div className="text-center mb-12"><Award size={60} className="text-yellow-300 mx-auto mb-4" /><h1 className="text-5xl font-bold text-white mb-4">Kids Chore & Reward</h1><p className="text-xl text-purple-200">Login with Google to continue.</p></div><Card className="w-full max-w-md"><h2 className="text-2xl font-semibold text-gray-700 mb-6 text-center">Sign In</h2><Button onClick={handleLoginWithGoogle} className="w-full mb-4 bg-red-500 hover:bg-red-600 text-white" icon={LogIn}>Login with Google</Button><p className="text-xs text-gray-500 text-center mt-4">Parents and Kids with registered emails can log in here.</p></Card>{SYSTEM_ADMIN_EMAILS.length === 0 && process.env.NODE_ENV === 'development' && (<p className="mt-4 text-sm text-yellow-300 bg-black bg-opacity-20 p-2 rounded">Dev Note: No SA emails configured.</p>)}</div>);
     }
 
-    // If firebaseAuthUser is present (and not anonymous handled above), but loggedInUser profile is not yet fully loaded.
-    if (!loggedInUser?.uid) {
+    if (!loggedInUser?.uid) { // firebaseAuthUser is present, but loggedInUser (app profile) is not yet loaded
         return (<div className="min-h-screen bg-gradient-to-br from-gray-700 to-gray-900 flex flex-col items-center justify-center p-4 text-white"><Award size={60} className="text-yellow-400 mx-auto mb-4" /><h1 className="text-4xl font-bold mb-4">Welcome!</h1><p className="text-lg mb-6">Processing your account details...</p></div>);
     }
 
@@ -271,7 +277,7 @@ function App() {
         if (kidProfile) {
             viewToRender = <KidDashboard kidData={{...kidProfile, points: kidProfile.points || 0}} familyId={loggedInUser.activeFamilyRole.familyId} allTasks={tasks} rewards={rewards} completedTasks={completedTasks} redeemedRewardsData={redeemedRewardsData} showConfirmation={showConfirmation} />;
         } else { viewToRender = <div className="text-center p-8"><p className="text-xl text-red-500">Your kid profile was not found in family "{loggedInUser.activeFamilyRole.familyName}".</p><p>Please contact your parent.</p></div>; }
-    } else { 
+    } else { // Fallback for logged-in users without a clear app role/view
          viewToRender = (<div className="text-center p-8"><h2 className="text-2xl font-semibold mb-4">Welcome, {loggedInUser.displayName}!</h2><p>Your role is not fully set up for a family view.</p>{loggedInUser.isSA && <p>You are a System Admin. <Button onClick={switchToAdminView}>Go to Admin Dashboard</Button></p>}{loggedInUser.familyRoles?.length === 0 && !loggedInUser.isSA && <p>Please ask an Admin or Parent to add you to a family.</p>}</div>);
     }
 
@@ -289,16 +295,34 @@ function App() {
                             {loggedInUser.displayName}
                             {loggedInUser.isSA && <span className="ml-1 px-2 py-0.5 bg-blue-100 text-blue-700 text-xs rounded-full">SA</span>}
                         </span>
-                        {loggedInUser.isSA ? ( 
-                            loggedInUser.activeFamilyRole ? 
-                                <Button onClick={switchToAdminView} className="bg-blue-100 hover:bg-blue-200 text-blue-700 text-xs px-2 py-1" icon={UserCog}>SA Dash</Button>
-                             : 
-                                <span className="px-3 py-1 text-sm font-semibold rounded-full bg-blue-100 text-blue-700">Admin View</span>
-                        ) : loggedInUser.activeFamilyRole?.role === 'parent' ? 
-                            <span className="px-3 py-1 text-sm font-semibold rounded-full bg-purple-100 text-purple-700">Parent View</span>
-                         : loggedInUser.activeFamilyRole?.role === 'kid' ? 
+
+                        {/* SA Dash button should always be present if user isSA */}
+                        {loggedInUser.isSA && (
+                            <Button
+                                onClick={switchToAdminView}
+                                // Style differently if already in admin view (no activeFamilyRole)
+                                className={`text-xs px-2 py-1 ${!loggedInUser.activeFamilyRole ? 'bg-blue-700 text-white cursor-default ring-1 ring-blue-800' : 'bg-blue-500 hover:bg-blue-600 text-white'}`}
+                                icon={UserCog}
+                            >
+                                SA Dash
+                            </Button>
+                        )}
+                        
+                        {/* Contextual View Name */}
+                        {loggedInUser.isSA && !loggedInUser.activeFamilyRole && ( // SA in Admin Dashboard
+                             <span className="px-3 py-1 text-sm font-semibold rounded-full bg-blue-100 text-blue-700 hidden md:inline">
+                                Admin Dashboard
+                            </span>
+                        )}
+                        {loggedInUser.activeFamilyRole && loggedInUser.activeFamilyRole.role === 'parent' && ( // Any parent (SA or not) in parent view
+                             <span className="px-3 py-1 text-sm font-semibold rounded-full bg-purple-100 text-purple-700">
+                                Parent View
+                            </span>
+                        )}
+                        {!loggedInUser.isSA && loggedInUser.activeFamilyRole?.role === 'kid' && ( // Non-SA Kid
                             <span className="px-3 py-1 text-sm font-semibold rounded-full bg-green-100 text-green-700">Kid View</span>
-                         : null}
+                        )}
+
                         <Button onClick={handleLogout} className="bg-gray-500 hover:bg-gray-600 px-2 sm:px-4" icon={LogOut}><span className="hidden sm:inline">Logout</span></Button>
                     </div>
                 </div>
