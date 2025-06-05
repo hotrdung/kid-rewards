@@ -100,7 +100,7 @@ function App() {
     const [firebaseAuthUser, setFirebaseAuthUser] = useState(null);
     const [loggedInUser, setLoggedInUser] = useState(null); 
     const [isAuthReady, setIsAuthReady] = useState(false);
-    const [allFamiliesForSA, setAllFamiliesForSA] = useState([]); // Renamed for clarity
+    const [allFamiliesForSA, setAllFamiliesForSA] = useState([]); 
     const [kids, setKids] = useState([]); 
     const [tasks, setTasks] = useState([]); 
     const [rewards, setRewards] = useState([]); 
@@ -121,7 +121,7 @@ function App() {
             setErrorState(''); 
             setFirebaseAuthUser(user); 
 
-            if (user && !user.isAnonymous) { // Process only for signed-in (Google) users
+            if (user && !user.isAnonymous) {
                 const userDocRef = doc(db, usersCollectionPath, user.uid);
                 let userDocSnap;
                 try { userDocSnap = await getDoc(userDocRef); } 
@@ -182,80 +182,75 @@ function App() {
                     } catch (famError) { setError("Could not set up default family. " + famError.message); }
                 }
                 
-                // --- Enhanced logic for non-SA users (potential kids) ---
-                if (!userProfileData.isSA && user.email) {
-                    let userHadExistingRole = userProfileData.familyRoles && userProfileData.familyRoles.length > 0;
-                    let roleUpdated = false;
+                // Fetch current family names for all roles
+                if (userProfileData.familyRoles && userProfileData.familyRoles.length > 0) {
+                    const fetchedFamilies = {}; // Cache fetched family names
+                    const rolesWithUpToDateNames = await Promise.all(
+                        userProfileData.familyRoles.map(async (fr) => {
+                            if (fetchedFamilies[fr.familyId]) {
+                                return { ...fr, familyName: fetchedFamilies[fr.familyId] };
+                            }
+                            try {
+                                const familyDocSnap = await getDoc(doc(db, familiesCollectionPath, fr.familyId));
+                                const currentFamilyName = familyDocSnap.exists() ? familyDocSnap.data().familyName : "Unknown Family";
+                                fetchedFamilies[fr.familyId] = currentFamilyName;
+                                return { ...fr, familyName: currentFamilyName };
+                            } catch (famNameError) {
+                                console.error(`Error fetching family name for ${fr.familyId}:`, famNameError);
+                                return { ...fr, familyName: "Error: Family Name" };
+                            }
+                        })
+                    );
+                    userProfileData.familyRoles = rolesWithUpToDateNames;
 
-                    // Query all families to find if this user's email matches a kid in any family
-                    const familiesSnapshot = await getDocs(collection(db, familiesCollectionPath));
-                    for (const familyDoc of familiesSnapshot.docs) {
-                        const familyData = familyDoc.data();
-                        const familyId = familyDoc.id;
-                        const kidsPath = getFamilyScopedCollectionPath(familyId, 'kids');
+                    // Update activeFamilyRole with the latest familyName if it exists
+                    if (userProfileData.activeFamilyRole) {
+                        const activeRoleDetails = rolesWithUpToDateNames.find(
+                            r => r.familyId === userProfileData.activeFamilyRole.familyId && r.role === userProfileData.activeFamilyRole.role
+                        );
+                        if (activeRoleDetails) {
+                            userProfileData.activeFamilyRole = activeRoleDetails;
+                        } else if (rolesWithUpToDateNames.length > 0) { // Active role was invalid or missing
+                             userProfileData.activeFamilyRole = rolesWithUpToDateNames[0]; // Default to first valid role
+                        } else { // No valid roles left
+                            userProfileData.activeFamilyRole = null;
+                        }
+                    } else if (rolesWithUpToDateNames.length > 0) { // No active role was set, default to first valid role
+                        userProfileData.activeFamilyRole = rolesWithUpToDateNames[0];
+                    }
+                }
+                
+                if (!userProfileData.isSA && user.email && (!userProfileData.familyRoles || userProfileData.familyRoles.length === 0)) {
+                    console.log(`User ${user.email} is not SA and has no family roles. Attempting to find kid profile across families.`);
+                    const allCurrentFamilies = (await getDocs(collection(db, familiesCollectionPath))).docs.map(d => ({id: d.id, ...d.data()}));
+
+                    for (const family of allCurrentFamilies) {
+                        const kidsPath = getFamilyScopedCollectionPath(family.id, 'kids');
                         const kidsQuery = query(collection(db, kidsPath), where("email", "==", user.email.toLowerCase()));
                         const kidDocsSnapshot = await getDocs(kidsQuery);
 
                         if (!kidDocsSnapshot.empty) {
-                            const kidDocInFamily = kidDocsSnapshot.docs[0]; // Assuming one kid per email per family
-                            
-                            // Link authUid if not present or different
+                            const kidDocInFamily = kidDocsSnapshot.docs[0];
                             if (kidDocInFamily.data().authUid !== user.uid) {
                                 await updateDoc(doc(db, kidsPath, kidDocInFamily.id), { authUid: user.uid });
-                                console.log(`Linked authUid for kid ${user.email} in family ${familyData.familyName}`);
                             }
-
-                            // Check if this family role already exists for the user
-                            const existingFamilyRole = userProfileData.familyRoles.find(
-                                fr => fr.familyId === familyId && fr.role === 'kid'
-                            );
-                            if (!existingFamilyRole) {
-                                const newKidRole = { familyId: familyId, role: 'kid', familyName: familyData.familyName };
-                                await updateDoc(userDocRef, { familyRoles: arrayUnion(newKidRole) });
-                                userProfileData.familyRoles.push(newKidRole); // Update local state
-                                roleUpdated = true;
-                                console.log(`Added kid role for ${user.email} in family ${familyData.familyName}`);
-                            }
-                            // Break if we found and processed the kid's role, assuming one primary kid role for now
-                            // This might need adjustment if a user can be a kid in multiple families simultaneously.
+                            const newKidRole = { familyId: family.id, role: 'kid', familyName: family.familyName };
+                            await updateDoc(userDocRef, { familyRoles: arrayUnion(newKidRole), activeFamilyRole: newKidRole });
+                            userProfileData.familyRoles.push(newKidRole);
+                            userProfileData.activeFamilyRole = newKidRole;
+                            console.log(`Associated ${user.email} as kid in family ${family.familyName}`);
                             break; 
                         }
-                    }
-                    if (roleUpdated && !userProfileData.activeFamilyRole && userProfileData.familyRoles.length > 0) {
-                         // If roles were updated and no active role, set one
-                        userProfileData.activeFamilyRole = userProfileData.familyRoles.find(r => r.role === 'kid') || userProfileData.familyRoles[0];
-                    }
-                }
-                // --- End of enhanced logic for non-SA users ---
-
-                if (userProfileData.familyRoles && userProfileData.familyRoles.length > 0) {
-                    const rolesWithNames = await Promise.all(userProfileData.familyRoles.map(async (fr) => {
-                        if (fr.familyName && fr.familyName !== "Unknown Family") return fr;
-                        const familyDoc = await getDoc(doc(db, familiesCollectionPath, fr.familyId));
-                        return {...fr, familyName: familyDoc.exists() ? familyDoc.data().familyName : "Unknown Family"};
-                    }));
-                    userProfileData.familyRoles = rolesWithNames;
-                    if (userProfileData.activeFamilyRole && !userProfileData.activeFamilyRole.familyName) {
-                        const activeRoleDetails = rolesWithNames.find(r => r.familyId === userProfileData.activeFamilyRole.familyId && r.role === userProfileData.activeFamilyRole.role);
-                        if (activeRoleDetails) { userProfileData.activeFamilyRole = activeRoleDetails; } 
-                        else if (rolesWithNames.length > 0) { userProfileData.activeFamilyRole = rolesWithNames[0]; } 
-                        else { userProfileData.activeFamilyRole = null;}
-                    } else if (rolesWithNames.length > 0 && !userProfileData.activeFamilyRole) {
-                        userProfileData.activeFamilyRole = rolesWithNames[0];
                     }
                 }
                 setLoggedInUser(userProfileData);
 
-            } else { // User is null (logged out) or anonymous (after logout before Google sign-in)
+            } else { 
                 setLoggedInUser(null); 
                  try {
-                    // Attempt to sign in anonymously only if not already anonymous to avoid loops
                     if (!auth.currentUser || !auth.currentUser.isAnonymous) {
-                        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) { 
-                            await signInWithCustomToken(auth, __initial_auth_token); 
-                        } else { 
-                            await signInAnonymously(auth); 
-                        }
+                        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) { await signInWithCustomToken(auth, __initial_auth_token); } 
+                        else { await signInAnonymously(auth); }
                     }
                 } catch (authError) { setError("Failed to initialize a base session."); }
             }
@@ -294,7 +289,12 @@ function App() {
     const handleLogout = async () => { try { await signOut(auth); setLoggedInUser(null); } catch (logoutError) { setError("Failed to sign out."); }};
 
     const switchToAdminView = () => { if (loggedInUser?.isSA) { setLoggedInUser(prev => ({ ...prev, activeFamilyRole: null })); } };
-    const switchToFamilyView = (familyRole) => { setLoggedInUser(prev => ({ ...prev, activeFamilyRole: familyRole })); };
+    const switchToFamilyView = (familyRole) => { 
+        // Ensure the familyRole passed has the latest familyName
+        const familyFromList = allFamiliesForSA.find(f => f.id === familyRole.familyId);
+        const updatedRole = familyFromList ? { ...familyRole, familyName: familyFromList.familyName } : familyRole;
+        setLoggedInUser(prev => ({ ...prev, activeFamilyRole: updatedRole })); 
+    };
 
     if (!isAuthReady || isLoading) { return <div className="flex items-center justify-center min-h-screen bg-gray-100"><div className="text-xl font-semibold">Initializing App & Loading Data...</div></div>; }
     if (error) { return <div className="flex flex-col items-center justify-center min-h-screen bg-gray-100 p-4"><div className="text-xl font-semibold text-red-500 p-4 bg-red-100 rounded-md mb-4">{error}</div><Button onClick={() => {setErrorState(''); window.location.reload();}} className="bg-blue-500 hover:bg-blue-600">Try Again</Button></div>; }
@@ -309,7 +309,7 @@ function App() {
 
     let viewToRender;
     if (loggedInUser.isSA && !loggedInUser.activeFamilyRole) { 
-        viewToRender = <SystemAdminDashboard user={loggedInUser} families={allFamiliesForSA} showConfirmation={showConfirmation} switchToFamilyView={switchToFamilyView} />;
+        viewToRender = <SystemAdminDashboard user={loggedInUser} families={allFamiliesForSA} showConfirmation={showConfirmation} switchToFamilyView={switchToFamilyView} migrateDataToFamilyFunc={migrateDataToFamily} setErrorFunc={setError} />;
     } else if (loggedInUser.activeFamilyRole?.role === 'parent') {
         viewToRender = <ParentDashboard user={loggedInUser} familyId={loggedInUser.activeFamilyRole.familyId} kids={kids} tasks={tasks} rewards={rewards} completedTasks={completedTasks} redeemedRewardsData={redeemedRewardsData} showConfirmation={showConfirmation} allRewardsGlobal={rewards} />;
     } else if (loggedInUser.activeFamilyRole?.role === 'kid') {
@@ -327,7 +327,7 @@ function App() {
                 <div className="container mx-auto px-4 py-3 flex justify-between items-center">
                     <div className="flex items-center">
                        <Award size={32} className="text-purple-600 mr-2" />
-                       <h1 className="text-2xl font-bold text-gray-700">Chore Rewards</h1>
+                       <h1 className="text-2xl font-bold text-gray-700">Kid Rewards</h1> {/* Updated Title */}
                        {loggedInUser.activeFamilyRole && <span className="ml-2 text-sm text-gray-500 hidden sm:inline">({loggedInUser.activeFamilyRole.familyName})</span>}
                     </div>
                     <div className="flex items-center space-x-2 sm:space-x-4">
@@ -367,7 +367,6 @@ function App() {
                             )
                         )}
                         
-                        {/* Contextual View Name for non-SA or SA in parent view */}
                         {loggedInUser.activeFamilyRole?.role === 'parent' && (
                              <span className="px-3 py-1 text-sm font-semibold rounded-full bg-purple-100 text-purple-700">
                                 Parent View
@@ -383,11 +382,11 @@ function App() {
             </header>
             <main className="container mx-auto p-4 sm:p-6">{viewToRender}</main>
             <ConfirmationModal isOpen={confirmModalState.isOpen} onClose={closeConfirmation} title={confirmModalState.title} message={confirmModalState.message} onConfirm={() => { confirmModalState.onConfirm(); closeConfirmation(); }} confirmText={confirmModalState.confirmText} children={confirmModalState.children} />
-            <footer className="text-center py-6 text-gray-500 text-sm">&copy; {new Date().getFullYear()} Chore Rewards App. App ID: {currentAppId}</footer>
+            <footer className="text-center py-6 text-gray-500 text-sm">&copy; {new Date().getFullYear()} Kid Rewards App. App ID: {currentAppId}</footer>
         </div>);
 }
 
-// --- SystemAdminDashboard (Removed "Switch to Parent View", added ForceMigrateButton) ---
+// --- SystemAdminDashboard (Added ForceMigrateButton, removed internal family switch buttons) ---
 const SystemAdminDashboard = ({ user, families, showConfirmation, switchToFamilyView, migrateDataToFamilyFunc, setErrorFunc }) => { 
     const [activeTab, setActiveTab] = useState('manageFamilies'); 
     const NavItem = ({ tabName, icon: Icon, label }) => ( <button onClick={() => setActiveTab(tabName)} className={`flex items-center px-4 py-3 rounded-lg transition-colors duration-150 ${activeTab === tabName ? 'bg-blue-600 text-white shadow-md' : 'text-gray-600 hover:bg-blue-100'}`}><Icon size={20} className="mr-2" /> {label}</button>); 
@@ -396,6 +395,7 @@ const SystemAdminDashboard = ({ user, families, showConfirmation, switchToFamily
         <Card> 
             <h2 className="text-3xl font-semibold text-gray-800 mb-1">System Admin Dashboard</h2> 
             <p className="text-gray-600 mt-1">Manage families and application settings.</p> 
+            {/* Switch to family view is now handled by the main header button */}
             <ForceMigrateButton user={user} families={families} showConfirmation={showConfirmation} migrateFunc={migrateDataToFamilyFunc} setError={setErrorFunc} />
         </Card> 
         <nav className="bg-white shadow rounded-lg p-2"><div className="flex flex-wrap gap-2"><NavItem tabName="manageFamilies" icon={Building} label="Manage Families" /><NavItem tabName="manageFamilyParents" icon={UserCog} label="Manage Family Parents" /></div></nav> 
@@ -406,59 +406,8 @@ const SystemAdminDashboard = ({ user, families, showConfirmation, switchToFamily
     </div>);
 };
 
-// --- ForceMigrateButton (New Component for SA Dashboard) ---
-const ForceMigrateButton = ({ user, families, showConfirmation, migrateFunc, setError }) => {
-    const defaultFamilyRole = user.familyRoles?.find(fr => {
-        const family = families.find(f => f.id === fr.familyId);
-        return family?.saDefaultFamily && fr.role === 'parent';
-    });
-
-    if (!user.isSA || !defaultFamilyRole) { 
-        return null;
-    }
-
-    const handleForceMigration = async () => {
-        showConfirmation(
-            "Force Data Migration",
-            `This will attempt to migrate data from the old global path to your default family "${defaultFamilyRole.familyName}". This is usually a one-time operation. Proceed only if you are sure the automatic migration did not complete correctly. \n\nCheck console for details after running.`,
-            async () => {
-                if(setError) setError(''); 
-                console.log("Manually triggering migration for default family:", defaultFamilyRole.familyId);
-                const success = await migrateFunc(defaultFamilyRole.familyId, user.uid, user.displayName, setError);
-                if (success) {
-                    const userDocRef = doc(db, usersCollectionPath, user.uid);
-                    await updateDoc(userDocRef, { defaultFamilyDataMigrated: true });
-                    alert("Data migration attempt completed. Please verify the data and check the console for details.");
-                } else {
-                    alert("Data migration attempt encountered errors. Please check the console.");
-                }
-            },
-            "Force Migrate Now"
-        );
-    };
-
-    return (
-        <div className="mt-6 p-4 border border-orange-400 bg-orange-50 rounded-md shadow">
-            <h4 className="text-md font-semibold text-orange-800 mb-2 flex items-center">
-                <AlertCircle size={20} className="mr-2 text-orange-600" />
-                Manual Data Migration Tool
-            </h4>
-            <p className="text-sm text-orange-700 mb-3">
-                If you suspect data from a previous app version (specifically from global paths) did not automatically migrate to your default family (<span className="font-semibold">{defaultFamilyRole.familyName}</span>), you can manually trigger the migration process.
-            </p>
-            <Button
-                onClick={handleForceMigration}
-                className="bg-orange-500 hover:bg-orange-600 text-white text-sm"
-                icon={RefreshCcw}
-            >
-                Force Migrate to "{defaultFamilyRole.familyName}"
-            </Button>
-            {user.defaultFamilyDataMigrated && <p className="text-xs text-green-700 mt-2"><CheckCircle size={12} className="inline mr-1"/>Migration flag for default family is already set.</p>}
-            {!user.defaultFamilyDataMigrated && <p className="text-xs text-yellow-700 mt-2"><Info size={12} className="inline mr-1"/>Migration flag not yet set.</p>}
-        </div>
-    );
-};
-
+// --- ForceMigrateButton (Unchanged) ---
+const ForceMigrateButton = ({ user, families, showConfirmation, migrateFunc, setError }) => { const defaultFamilyRole = user.familyRoles?.find(fr => { const family = families.find(f => f.id === fr.familyId); return family?.saDefaultFamily && fr.role === 'parent'; }); if (!user.isSA || !defaultFamilyRole) { return null; } const handleForceMigration = async () => { showConfirmation( "Force Data Migration", `This will attempt to migrate data from the old global path to your default family "${defaultFamilyRole.familyName}". This is usually a one-time operation. Proceed only if you are sure the automatic migration did not complete correctly. \n\nCheck console for details after running.`, async () => { if(setError) setError(''); console.log("Manually triggering migration for default family:", defaultFamilyRole.familyId); const success = await migrateFunc(defaultFamilyRole.familyId, user.uid, user.displayName, setError); if (success) { const userDocRef = doc(db, usersCollectionPath, user.uid); await updateDoc(userDocRef, { defaultFamilyDataMigrated: true }); alert("Data migration attempt completed. Please verify the data and check the console for details."); } else { alert("Data migration attempt encountered errors. Please check the console."); } }, "Force Migrate Now" ); }; return ( <div className="mt-6 p-4 border border-orange-400 bg-orange-50 rounded-md shadow"> <h4 className="text-md font-semibold text-orange-800 mb-2 flex items-center"> <AlertCircle size={20} className="mr-2 text-orange-600" /> Manual Data Migration Tool </h4> <p className="text-sm text-orange-700 mb-3"> If you suspect data from a previous app version (specifically from global paths) did not automatically migrate to your default family (<span className="font-semibold">{defaultFamilyRole.familyName}</span>), you can manually trigger the migration process. </p> <Button onClick={handleForceMigration} className="bg-orange-500 hover:bg-orange-600 text-white text-sm" icon={RefreshCcw} > Force Migrate to "{defaultFamilyRole.familyName}" </Button> {user.defaultFamilyDataMigrated && <p className="text-xs text-green-700 mt-2"><CheckCircle size={12} className="inline mr-1"/>Migration flag for default family is already set.</p>} {!user.defaultFamilyDataMigrated && <p className="text-xs text-yellow-700 mt-2"><Info size={12} className="inline mr-1"/>Migration flag not yet set.</p>} </div> );};
 
 // --- ManageFamilies (SA - Unchanged) ---
 const ManageFamilies = ({ families, showConfirmation, currentUser }) => { const [isModalOpen, setIsModalOpen] = useState(false); const [familyName, setFamilyName] = useState(''); const [editingFamily, setEditingFamily] = useState(null); const [formError, setFormError] = useState(''); const openAddModal = () => { setEditingFamily(null); setFamilyName(''); setFormError(''); setIsModalOpen(true); }; const openEditModal = (family) => { setEditingFamily(family); setFamilyName(family.familyName); setFormError(''); setIsModalOpen(true); }; const handleSaveFamily = async () => { if (!familyName.trim()) { setFormError('Family name is required.'); return; } setFormError(''); const familyData = { familyName: familyName.trim(), updatedAt: Timestamp.now(), updatedBy: currentUser.uid, }; try { if (editingFamily) { await updateDoc(doc(db, familiesCollectionPath, editingFamily.id), familyData); } else { familyData.createdAt = Timestamp.now(); familyData.createdBy = currentUser.uid; await addDoc(collection(db, familiesCollectionPath), familyData); } setIsModalOpen(false); } catch (e) { console.error("Error saving family:", e); setFormError("Failed to save family."); } }; const confirmDeleteFamily = (family) => { showConfirmation( "Delete Family", `Are you sure you want to delete the family "${family.familyName}"? This will delete ALL associated data (kids, tasks, rewards, history) and cannot be undone. THIS IS A PLACEHOLDER - FULL DATA DELETION REQUIRES SERVER-SIDE LOGIC.`, async () => { console.warn("Attempting to delete family doc. Cascading delete of subcollections needs server-side implementation."); try { await deleteDoc(doc(db, familiesCollectionPath, family.id)); } catch (e) { console.error("Error deleting family doc:", e); } } ); }; return ( <Card><div className="flex justify-between items-center mb-6"><h3 className="text-2xl font-semibold text-gray-700">Manage Families</h3><Button onClick={openAddModal} className="bg-green-500 hover:bg-green-600" icon={PlusCircle}>Add Family</Button></div>{families.length === 0 ? <p>No families created yet.</p> : (<ul className="space-y-3">{families.map(fam => (<li key={fam.id} className="flex justify-between items-center p-3 bg-gray-50 rounded"><span>{fam.familyName} <span className="text-xs text-gray-400">({fam.id})</span></span><div className="space-x-2"><Button onClick={() => openEditModal(fam)} icon={Edit3} className="bg-blue-500 hover:bg-blue-600 text-sm px-2 py-1">Edit</Button><Button onClick={() => confirmDeleteFamily(fam)} icon={Trash2} className="bg-red-500 hover:bg-red-600 text-sm px-2 py-1">Delete</Button></div></li>))}</ul>)}<Modal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} title={editingFamily ? "Edit Family" : "Add New Family"}>{formError && <p className="text-red-500 text-sm mb-2">{formError}</p>}<InputField label="Family Name" value={familyName} onChange={e => setFamilyName(e.target.value)} required /><Button onClick={handleSaveFamily} className="w-full bg-green-500 hover:bg-green-600">{editingFamily ? "Save Changes" : "Create Family"}</Button></Modal></Card> );};
@@ -559,7 +508,7 @@ const ManageTasks = ({ familyId, tasksInFamily, kidsInFamily, showConfirmation }
 };
 
 // --- ManageRewards (Parent - Unchanged) ---
-const ManageRewards = ({ familyId, rewardsInFamily, showConfirmation }) => { const [isModalOpen, setIsModalOpen] = useState(false); const [rewardName, setRewardName] = useState(''); const [rewardCost, setRewardCost] = useState(''); const [formError, setFormError] = useState(''); const [sortConfig, setSortConfig] = useState({ key: 'pointCost', direction: 'descending' }); const handleAddReward = async () => { setFormError(''); if (!rewardName.trim() || !rewardCost || isNaN(parseInt(rewardCost)) || parseInt(rewardCost) <= 0) { setFormError("Reward name and a positive point cost are required."); return; } try { await addDoc(collection(db, getFamilyScopedCollectionPath(familyId, 'rewards')), { name: rewardName.trim(), pointCost: parseInt(rewardCost), isAvailable: true, createdAt: Timestamp.now() }); setRewardName(''); setRewardCost(''); setIsModalOpen(false); } catch (error) { console.error("Error adding reward: ", error); setFormError("Failed to add reward."); } }; const [rewardToDelete, setRewardToDelete] = useState(null); const confirmDeleteReward = (reward) => { setRewardToDelete(reward); showConfirmation("Confirm Deletion", `Are you sure you want to delete reward "${reward.name}"?`, () => handleDeleteReward(reward.id)); }; const handleDeleteReward = async (rewardId) => { if(!rewardId) return; try { await deleteDoc(doc(db, getFamilyScopedCollectionPath(familyId, 'rewards'), rewardId)); setRewardToDelete(null); } catch (error) { console.error("Error deleting reward: ", error); setRewardToDelete(null); } }; const sortedRewards = useMemo(() => { let sortableItems = [...rewardsInFamily]; if (sortConfig.key) { sortableItems.sort((a, b) => { let valA = a[sortConfig.key]; let valB = b[sortConfig.key]; if (sortConfig.key === 'createdAt' && valA?.toDate && valB?.toDate) { valA = valA.toMillis(); valB = valB.toMillis(); } if (valA < valB) return sortConfig.direction === 'ascending' ? -1 : 1; if (valA > valB) return sortConfig.direction === 'ascending' ? 1 : -1; return 0; }); } return sortableItems; }, [rewardsInFamily, sortConfig]); const requestSort = (key) => { let direction = 'ascending'; if (sortConfig.key === key && sortConfig.direction === 'ascending') { direction = 'descending'; } else if (sortConfig.key === key && sortConfig.direction === 'descending') { direction = 'ascending';} setSortConfig({ key, direction }); }; const getSortIcon = (key) => { if (sortConfig.key !== key) return <ChevronsUpDown size={16} className="ml-1 opacity-40" />; return sortConfig.direction === 'ascending' ? <ArrowUpCircle size={16} className="ml-1" /> : <ArrowDownCircle size={16} className="ml-1" />; }; return ( <Card><div className="flex flex-col sm:flex-row justify-between items-center mb-6 gap-2"><h3 className="text-2xl font-semibold text-gray-700">Rewards</h3><div className="flex items-center gap-2"><span className="text-sm text-gray-600">Sort by:</span><Button onClick={() => requestSort('name')} className="bg-gray-200 hover:bg-gray-300 text-gray-700 px-3 py-1 text-sm" icon={null}>Name {getSortIcon('name')}</Button><Button onClick={() => requestSort('pointCost')} className="bg-gray-200 hover:bg-gray-300 text-gray-700 px-3 py-1 text-sm" icon={null}>Points {getSortIcon('pointCost')}</Button><Button onClick={() => requestSort('createdAt')} className="bg-gray-200 hover:bg-gray-300 text-gray-700 px-3 py-1 text-sm" icon={null}>Date {getSortIcon('createdAt')}</Button><Button onClick={() => {setIsModalOpen(true); setFormError('');}} className="bg-yellow-500 hover:bg-yellow-600" icon={PlusCircle}>Add Reward</Button></div></div>{sortedRewards.length === 0 ? <p className="text-gray-500">No rewards defined yet for this family.</p> : (<ul className="space-y-3">{sortedRewards.map(reward => (<li key={reward.id} className="flex justify-between items-center p-4 bg-gray-50 rounded-lg shadow-sm"><div><span className="font-medium text-lg text-gray-800">{reward.name}</span><span className="ml-4 text-sm text-yellow-700 font-semibold">{reward.pointCost} points</span></div><Button onClick={() => confirmDeleteReward(reward)} className="bg-red-500 hover:bg-red-600 px-3 py-1 text-sm" icon={Trash2}>Delete</Button></li>))}</ul>)}<Modal isOpen={isModalOpen} onClose={() => {setIsModalOpen(false); setFormError('');}} title="Add New Reward">{formError && <p className="text-red-500 text-sm mb-3">{formError}</p>}<InputField label="Reward Name" value={rewardName} onChange={e => setRewardName(e.target.value)} placeholder="e.g., Extra screen time" required /><InputField label="Point Cost" type="number" value={rewardCost} onChange={e => setRewardCost(e.target.value)} placeholder="e.g., 50" required min="1" /><Button onClick={handleAddReward} className="w-full bg-yellow-500 hover:bg-yellow-600">Add Reward</Button></Modal></Card> );};
+const ManageRewards = ({ familyId, rewardsInFamily, showConfirmation }) => { const [isModalOpen, setIsModalOpen] = useState(false); const [rewardName, setRewardName] = useState(''); const [rewardCost, setRewardCost] = useState(''); const [formError, setFormError] = useState(''); const [sortConfig, setSortConfig] = useState({ key: 'pointCost', direction: 'descending' }); const handleAddReward = async () => { setFormError(''); if (!rewardName.trim() || !rewardCost || isNaN(parseInt(rewardCost)) || parseInt(rewardCost) <= 0) { setFormError("Reward name and a positive point cost are required."); return; } try { await addDoc(collection(db, getFamilyScopedCollectionPath(familyId, 'rewards')), { name: rewardName.trim(), pointCost: parseInt(rewardCost), isAvailable: true, createdAt: Timestamp.now() }); setRewardName(''); setRewardCost(''); setIsModalOpen(false); } catch (error) { console.error("Error adding reward: ", error); setFormError("Failed to add reward."); } }; const [rewardToDelete, setRewardToDelete] = useState(null); const confirmDeleteReward = (reward) => { setRewardToDelete(reward); showConfirmation("Confirm Deletion", `Are you sure you want to delete reward "${reward.name}"?`, () => handleDeleteReward(reward.id)); }; const handleDeleteReward = async (rewardId) => { if(!rewardId) return; try { await deleteDoc(doc(db, getFamilyScopedCollectionPath(familyId, 'rewards'), rewardId)); setRewardToDelete(null); } catch (error) { console.error("Error deleting reward: ", error); setRewardToDelete(null); } }; const sortedRewards = useMemo(() => { let sortableItems = [...rewardsInFamily]; if (sortConfig.key) { sortableItems.sort((a, b) => { let valA = a[sortConfig.key]; let valB = b[sortConfig.key]; if (sortConfig.key === 'createdAt' && valA?.toDate && valB?.toDate) { valA = valA.toMillis(); valB = valB.toMillis(); } if (valA < valB) return sortConfig.direction === 'ascending' ? -1 : 1; if (valA > valB) return sortConfig.direction === 'ascending' ? 1 : -1; return 0; }); } return sortableItems; }, [rewardsInFamily, sortConfig]); const requestSort = (key) => { let direction = 'ascending'; if (sortConfig.key === key && sortConfig.direction === 'ascending') { direction = 'descending'; } else if (sortConfig.key === key && sortConfig.direction === 'descending') { direction = 'ascending';} setSortConfig({ key, direction }); }; const getSortIcon = (key) => { if (sortConfig.key !== key) return <ChevronsUpDown size={16} className="ml-1 opacity-40" />; return sortConfig.direction === 'ascending' ? <ArrowUpCircle size={16} className="ml-1" /> : <ArrowDownCircle size={16} className="ml-1" />; }; return ( <Card><div className="flex flex-col sm:flex-row justify-between items-center mb-6 gap-2"><h3 className="text-2xl font-semibold text-gray-700">Rewards</h3><div className="flex items-center gap-2"><Button onClick={() => requestSort('name')} className="bg-gray-200 hover:bg-gray-300 text-gray-700 px-3 py-1 text-sm" icon={null}>Name {getSortIcon('name')}</Button><Button onClick={() => requestSort('pointCost')} className="bg-gray-200 hover:bg-gray-300 text-gray-700 px-3 py-1 text-sm" icon={null}>Points {getSortIcon('pointCost')}</Button><Button onClick={() => requestSort('createdAt')} className="bg-gray-200 hover:bg-gray-300 text-gray-700 px-3 py-1 text-sm" icon={null}>Date {getSortIcon('createdAt')}</Button><Button onClick={() => {setIsModalOpen(true); setFormError('');}} className="bg-yellow-500 hover:bg-yellow-600" icon={PlusCircle}>Add Reward</Button></div></div>{sortedRewards.length === 0 ? <p className="text-gray-500">No rewards defined yet for this family.</p> : (<ul className="space-y-3">{sortedRewards.map(reward => (<li key={reward.id} className="flex justify-between items-center p-4 bg-gray-50 rounded-lg shadow-sm"><div><span className="font-medium text-lg text-gray-800">{reward.name}</span><span className="ml-4 text-sm text-yellow-700 font-semibold">{reward.pointCost} points</span></div><Button onClick={() => confirmDeleteReward(reward)} className="bg-red-500 hover:bg-red-600 px-3 py-1 text-sm" icon={Trash2}>Delete</Button></li>))}</ul>)}<Modal isOpen={isModalOpen} onClose={() => {setIsModalOpen(false); setFormError('');}} title="Add New Reward">{formError && <p className="text-red-500 text-sm mb-3">{formError}</p>}<InputField label="Reward Name" value={rewardName} onChange={e => setRewardName(e.target.value)} placeholder="e.g., Extra screen time" required /><InputField label="Point Cost" type="number" value={rewardCost} onChange={e => setRewardCost(e.target.value)} placeholder="e.g., 50" required min="1" /><Button onClick={handleAddReward} className="w-full bg-yellow-500 hover:bg-yellow-600">Add Reward</Button></Modal></Card> );};
 
 // --- ApproveTasks (Parent - Updated to include totalEarnedPoints) ---
 const ApproveTasks = ({ familyId, pendingTasks, kidsInFamily, allTasksInFamily, showConfirmation, firebaseUser }) => { 
