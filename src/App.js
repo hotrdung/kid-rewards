@@ -1,19 +1,21 @@
 /* global __firebase_config, __app_id, __initial_auth_token */
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useMemo } from 'react'; // useCallback removed as it was not used
 import { initializeApp } from 'firebase/app';
 import {
     getAuth,
     signInAnonymously,
     onAuthStateChanged,
-    signInWithCustomToken
+    signInWithCustomToken,
+    GoogleAuthProvider,
+    signInWithPopup,
+    signOut
 } from 'firebase/auth';
 import {
     getFirestore,
     collection,
     addDoc,
     doc,
-    setDoc,
     getDoc,
     getDocs,
     updateDoc,
@@ -23,17 +25,18 @@ import {
     where,
     Timestamp,
     writeBatch,
-    orderBy // Added for fetching tasks
 } from 'firebase/firestore';
-import { PlusCircle, Edit3, Trash2, CheckCircle, Gift, User, LogOut, Eye, DollarSign, ListChecks, ShieldCheck, Award, Home, Users, ClipboardList, Trophy, Bell, CalendarDays, Repeat, UserCheck, LockKeyhole } from 'lucide-react';
-
-// --- Constants ---
-const PARENT_PIN = process.env.REACT_APP_PARENT_PIN || "1234"; // For demo purposes. In a real app, this should be handled securely.
+import {
+    PlusCircle, Edit3, Trash2, CheckCircle, Gift, User, LogOut, DollarSign, ListChecks,
+    Award, Users, ClipboardList, Trophy, Bell, CalendarDays, Repeat, UserCheck, LogIn,
+    ThumbsUp, ThumbsDown, ArrowUpCircle, ArrowDownCircle, Mail, ChevronsUpDown, RefreshCcw, AlertTriangle, Coins, Star,
+    PackageCheck, PackageX, Eye // Added Star, PackageCheck, PackageX, Eye
+} from 'lucide-react';
 
 // --- Firebase Configuration ---
-const firebaseConfig = typeof __firebase_config !== 'undefined' 
-    ? JSON.parse(__firebase_config) 
-    : {
+const firebaseConfig = typeof __firebase_config !== 'undefined'
+    ? JSON.parse(__firebase_config)
+    : { /* Your fallback config */
         apiKey: process.env.REACT_APP_FIREBASE_API_KEY || "YOUR_API_KEY",
         authDomain: process.env.REACT_APP_FIREBASE_AUTH_DOMAIN || "YOUR_AUTH_DOMAIN",
         projectId: process.env.REACT_APP_FIREBASE_PROJECT_ID || "YOUR_PROJECT_ID",
@@ -42,13 +45,17 @@ const firebaseConfig = typeof __firebase_config !== 'undefined'
         appId: process.env.REACT_APP_FIREBASE_APP_ID || "YOUR_APP_ID"
     };
 
-const appId = typeof __app_id !== 'undefined' 
-    ? __app_id 
-    : (process.env.REACT_APP_CHORE_APP_ID || 'default-chore-app-enhanced');
+const appId = typeof __app_id !== 'undefined'
+    ? __app_id
+    : (process.env.REACT_APP_CHORE_APP_ID || 'kid-rewards-app-v4'); // Updated version
 
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
+
+// --- Parent Email Configuration ---
+const PARENT_EMAILS_STR = process.env.REACT_APP_PARENT_EMAILS || ""; 
+const PARENT_EMAILS = PARENT_EMAILS_STR.split(',').map(email => email.trim().toLowerCase()).filter(email => email);
 
 const getCollectionPath = (collectionName) => `/artifacts/${appId}/public/data/${collectionName}`;
 const kidsCollectionPath = getCollectionPath('kids');
@@ -58,1158 +65,531 @@ const completedTasksCollectionPath = getCollectionPath('completedTasks');
 const redeemedRewardsCollectionPath = getCollectionPath('redeemedRewards');
 
 // --- Date Helper Functions ---
-const getStartOfDay = (date) => new Date(date.getFullYear(), date.getMonth(), date.getDate());
-const getEndOfDay = (date) => new Date(date.getFullYear(), date.getMonth(), date.getDate(), 23, 59, 59, 999);
-const getStartOfWeek = (date) => {
-    const d = new Date(date);
-    const day = d.getDay();
-    const diff = d.getDate() - day + (day === 0 ? -6 : 1); // Adjust if Sunday is the first day
-    return getStartOfDay(new Date(d.setDate(diff)));
-};
-const getEndOfWeek = (date) => {
-    const startOfWeek = getStartOfWeek(date);
-    return getEndOfDay(new Date(startOfWeek.setDate(startOfWeek.getDate() + 6)));
-};
+const getStartOfDay = (date) => { /* Unchanged */ const d = new Date(date); d.setHours(0,0,0,0); return d; };
+const getEndOfDay = (date) => { /* Unchanged */ const d = new Date(date); d.setHours(23,59,59,999); return d; };
+const getStartOfWeek = (date) => { /* Unchanged */ const d = new Date(date); const day = d.getDay(); const diff = d.getDate() - day + (day === 0 ? -6 : 1); return getStartOfDay(new Date(d.setDate(diff))); };
+const getEndOfWeek = (date) => { /* Unchanged */ const startOfWeek = getStartOfWeek(date); const d = new Date(startOfWeek); d.setDate(d.getDate() + 6); return getEndOfDay(d); };
 const getStartOfMonth = (date) => getStartOfDay(new Date(date.getFullYear(), date.getMonth(), 1));
 const getEndOfMonth = (date) => getEndOfDay(new Date(date.getFullYear(), date.getMonth() + 1, 0));
 
-const calculateNextDueDate = (task) => {
-    if (!task.recurrenceType || task.recurrenceType === 'none') return null;
-    
-    let newDueDate = task.nextDueDate ? task.nextDueDate.toDate() : new Date();
-    if (newDueDate < new Date()) newDueDate = new Date(); // If overdue, start from today
+const DAYS_OF_WEEK = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
+const DAY_LABELS_SHORT = ["Su", "M", "Tu", "W", "Th", "F", "Sa"];
+
+// --- calculateNextDueDate (Unchanged from v3) ---
+const calculateNextDueDate = (task, fromDateInput = new Date()) => {
+    const fromDate = getStartOfDay(new Date(fromDateInput)); 
+    if (!task.recurrenceType || task.recurrenceType === 'none') {
+        return task.customDueDate ? Timestamp.fromDate(getStartOfDay(new Date(task.customDueDate))) : null;
+    }
+    let startDate = task.startDate ? getStartOfDay(new Date(task.startDate)) : getStartOfDay(new Date());
+    let candidateDate = new Date(Math.max(fromDate.getTime(), startDate.getTime()));
+    if (task.nextDueDate && task.nextDueDate.toDate) {
+        const currentNextDue = getStartOfDay(task.nextDueDate.toDate());
+        if (currentNextDue >= fromDate && currentNextDue >= startDate) {
+            candidateDate = new Date(currentNextDue);
+        }
+    }
+    if (candidateDate < startDate) candidateDate = new Date(startDate);
 
     switch (task.recurrenceType) {
         case 'daily':
-            newDueDate.setDate(newDueDate.getDate() + 1);
+            if (candidateDate <= fromDate) candidateDate.setDate(candidateDate.getDate() + 1);
+            if (candidateDate < startDate) candidateDate = new Date(startDate);
             break;
         case 'weekly':
-            newDueDate.setDate(newDueDate.getDate() + 7);
-            // Optionally, align to specific day of week if task.recurrenceDetails.dayOfWeek is set
-            break;
+            if (!task.daysOfWeek || task.daysOfWeek.length === 0) return null;
+            const selectedDayIndexes = task.daysOfWeek.map(day => DAYS_OF_WEEK.indexOf(day)).sort((a, b) => a - b);
+            if (selectedDayIndexes.length === 0) return null;
+            let attempts = 0;
+            const currentDayOfCandidate = candidateDate.getDay();
+            if (candidateDate <= fromDate && !(selectedDayIndexes.includes(currentDayOfCandidate) && candidateDate.getTime() === fromDate.getTime()) ) {
+                 candidateDate.setDate(candidateDate.getDate() + 1); 
+            }
+            if (candidateDate < startDate) candidateDate = new Date(startDate);
+            while (attempts < 14) {
+                const dayOfWeek = candidateDate.getDay();
+                for (const selectedDay of selectedDayIndexes) {
+                    if (selectedDay >= dayOfWeek) {
+                        const potentialDate = new Date(candidateDate);
+                        potentialDate.setDate(potentialDate.getDate() + (selectedDay - dayOfWeek));
+                        if (potentialDate >= startDate && potentialDate >= fromDate) {
+                            return Timestamp.fromDate(getStartOfDay(potentialDate));
+                        }
+                    }
+                }
+                candidateDate.setDate(candidateDate.getDate() + (7 - dayOfWeek)); 
+                if (candidateDate < startDate) candidateDate = new Date(startDate); 
+                attempts++;
+            }
+            return null; 
         case 'monthly':
-            newDueDate.setMonth(newDueDate.getMonth() + 1);
-            // Optionally, align to specific day of month if task.recurrenceDetails.dayOfMonth is set
-            break;
-        default:
-            return null;
+            const targetDayOfMonth = new Date(task.startDate).getDate(); 
+            if (candidateDate <= fromDate || candidateDate.getDate() > targetDayOfMonth) {
+                 if (candidateDate.getDate() > targetDayOfMonth && candidateDate.getMonth() === fromDate.getMonth() && candidateDate.getFullYear() === fromDate.getFullYear()){
+                    /* same month but past target day, do nothing to candidateDate month*/
+                 } else { candidateDate.setMonth(candidateDate.getMonth() + 1); }
+            }
+            candidateDate.setDate(targetDayOfMonth);
+            while (candidateDate.getDate() !== targetDayOfMonth) { candidateDate.setDate(targetDayOfMonth-1); candidateDate.setMonth(candidateDate.getMonth() + 1); candidateDate.setDate(targetDayOfMonth); }
+            while (candidateDate < startDate) { candidateDate.setMonth(candidateDate.getMonth() + 1); candidateDate.setDate(targetDayOfMonth); while (candidateDate.getDate() !== targetDayOfMonth) { candidateDate.setDate(targetDayOfMonth-1); candidateDate.setMonth(candidateDate.getMonth() + 1); candidateDate.setDate(targetDayOfMonth); }}
+            return Timestamp.fromDate(getStartOfDay(candidateDate));
+        default: return null;
     }
-    return Timestamp.fromDate(getStartOfDay(newDueDate));
+    return Timestamp.fromDate(getStartOfDay(candidateDate));
 };
 
-
-// --- Helper Components (Modal, Button, InputField, Card - unchanged, so not repeated for brevity) ---
-const Modal = ({ isOpen, onClose, title, children }) => {
+// --- Helper Components (Modal, ConfirmationModal, Button, InputField, SelectField, DayOfWeekSelector, TextAreaField, Card, StarIcon - added StarIcon) ---
+const Modal = ({ isOpen, onClose, title, children, size = "max-w-md" }) => { /* Unchanged */ if (!isOpen) return null; return (<div className="fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center p-4 z-50"><div className={`bg-white p-6 rounded-lg shadow-xl w-full ${size} max-h-[90vh] overflow-y-auto`}><div className="flex justify-between items-center mb-4"><h3 className="text-xl font-semibold text-gray-700">{title}</h3><button onClick={onClose} className="text-gray-500 hover:text-gray-700 text-2xl">&times;</button></div>{children}</div></div>); };
+const ConfirmationModal = ({ isOpen, onClose, title, message, onConfirm, confirmText = "Confirm", cancelText = "Cancel", children }) => { // Added children prop for custom content
     if (!isOpen) return null;
     return (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-            <div className="bg-white p-6 rounded-lg shadow-xl w-full max-w-md">
-                <div className="flex justify-between items-center mb-4">
-                    <h3 className="text-xl font-semibold text-gray-700">{title}</h3>
-                    <button onClick={onClose} className="text-gray-500 hover:text-gray-700">&times;</button>
-                </div>
-                {children}
+        <Modal isOpen={isOpen} onClose={onClose} title={title} size="max-w-md"> {/* Increased size for potential children */}
+            <p className="text-gray-600 mb-6">{message}</p>
+            {children && <div className="mb-4">{children}</div>} {/* Render children if provided */}
+            <div className="flex justify-end space-x-3">
+                <Button onClick={onClose} className="bg-gray-300 hover:bg-gray-400 text-gray-800" icon={null}>{cancelText}</Button>
+                <Button onClick={onConfirm} className="bg-red-500 hover:bg-red-600" icon={AlertTriangle}>{confirmText}</Button>
             </div>
-        </div>
+        </Modal>
+    );
+};
+const Button = ({ onClick, children, className = 'bg-blue-500 hover:bg-blue-600', icon: Icon, disabled = false, type = "button" }) => ( /* Unchanged */ <button type={type} onClick={onClick} disabled={disabled} className={`flex items-center justify-center text-white font-semibold py-2 px-4 rounded-lg shadow-md transition duration-150 ease-in-out focus:outline-none focus:ring-2 focus:ring-opacity-50 ${className} ${disabled ? 'opacity-50 cursor-not-allowed' : ''}`}>{Icon && <Icon size={18} className="mr-2" />} {children}</button>);
+const InputField = ({ label, type = 'text', value, onChange, placeholder, required = false, name, min, max }) => ( /* Unchanged */ <div className="mb-4"><label className="block text-sm font-medium text-gray-700 mb-1">{label}</label><input type={type} name={name} value={value} onChange={onChange} placeholder={placeholder} required={required} min={min} max={max} className="w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500" /></div>);
+const SelectField = ({ label, value, onChange, options, placeholder, name, required = false }) => ( /* Unchanged */ <div className="mb-4"><label className="block text-sm font-medium text-gray-700 mb-1">{label}</label><select name={name} value={value} onChange={onChange} required={required} className={`w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500`}>{placeholder && <option value="">{placeholder}</option>}{options.map(option => (<option key={option.value} value={option.value}>{option.label}</option>))}</select></div>);
+const DayOfWeekSelector = ({ selectedDays, onChange, name = "daysOfWeek" }) => { /* Unchanged */ const toggleDay = (day) => { const newSelectedDays = selectedDays.includes(day) ? selectedDays.filter(d => d !== day) : [...selectedDays, day]; onChange({ target: { name, value: newSelectedDays } }); }; return (<div className="mb-4"><label className="block text-sm font-medium text-gray-700 mb-1">Days of Week (for Weekly)</label><div className="flex space-x-1 sm:space-x-2">{DAYS_OF_WEEK.map((day, index) => (<button type="button" key={day} onClick={() => toggleDay(day)} className={`px-2 py-1.5 sm:px-3 sm:py-2 rounded-md border text-xs sm:text-sm font-medium transition-colors w-full ${selectedDays.includes(day) ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-gray-100 hover:bg-gray-200 text-gray-700 border-gray-300'}`}>{DAY_LABELS_SHORT[index]}</button>))}</div></div>); };
+const TextAreaField = ({ label, value, onChange, placeholder, name, rows = 3 }) => ( /* Unchanged */ <div className="mb-4"><label className="block text-sm font-medium text-gray-700 mb-1">{label}</label><textarea name={name} value={value} onChange={onChange} placeholder={placeholder} rows={rows} className="w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500" /></div>);
+const Card = ({ children, className = '' }) => (<div className={`bg-white shadow-lg rounded-xl p-6 ${className}`}>{children}</div>);
+const StarIconDisplay = ({ count, className = "text-yellow-400", size = 18 }) => { // New component for displaying stars
+    if (count <= 0) return null;
+    return (
+        <span className="flex items-center">
+            {Array.from({ length: count }).map((_, i) => (
+                <Star key={i} size={size} className={`${className} fill-current mr-0.5`} />
+            ))}
+        </span>
     );
 };
 
-const Button = ({ onClick, children, className = 'bg-blue-500 hover:bg-blue-600', icon: Icon, disabled = false }) => (
-    <button
-        onClick={onClick}
-        disabled={disabled}
-        className={`flex items-center justify-center text-white font-semibold py-2 px-4 rounded-lg shadow-md transition duration-150 ease-in-out focus:outline-none focus:ring-2 focus:ring-opacity-50 ${className} ${disabled ? 'opacity-50 cursor-not-allowed' : ''}`}
-    >
-        {Icon && <Icon size={18} className="mr-2" />}
-        {children}
-    </button>
-);
 
-const InputField = ({ label, type = 'text', value, onChange, placeholder, required = false, maxLength }) => (
-    <div className="mb-4">
-        <label className="block text-sm font-medium text-gray-700 mb-1">{label}</label>
-        <input
-            type={type}
-            value={value}
-            onChange={onChange}
-            placeholder={placeholder}
-            required={required}
-            maxLength={maxLength}
-            className="w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"
-        />
-    </div>
-);
-const SelectField = ({ label, value, onChange, options, placeholder }) => (
-    <div className="mb-4">
-        <label className="block text-sm font-medium text-gray-700 mb-1">{label}</label>
-        <select
-            value={value}
-            onChange={onChange}
-            className="w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"
-        >
-            {placeholder && <option value="">{placeholder}</option>}
-            {options.map(option => (
-                <option key={option.value} value={option.value}>{option.label}</option>
-            ))}
-        </select>
-    </div>
-);
-
-
-const Card = ({ children, className = '' }) => (
-    <div className={`bg-white shadow-lg rounded-xl p-6 ${className}`}>
-        {children}
-    </div>
-);
-
-
-// --- Main App Component ---
+// --- Main App Component (Unchanged from v3, except for App ID) ---
 function App() {
-    const [currentUser, setCurrentUser] = useState(null);
-    const [isAuthReady, setIsAuthReady] = useState(false);
-    const [authAttempt, setAuthAttempt] = useState(null); // null, 'parentPin', 'kidPin'
-    const [pinInput, setPinInput] = useState('');
-    const [pinError, setPinError] = useState('');
-    const [selectedKidForPin, setSelectedKidForPin] = useState(null);
-
-    const [role, setRole] = useState(null); // 'parent' or 'kid' (kid object)
-    
-    const [kids, setKids] = useState([]);
-    const [tasks, setTasks] = useState([]);
-    const [rewards, setRewards] = useState([]);
-    const [completedTasks, setCompletedTasks] = useState([]);
-    const [redeemedRewardsData, setRedeemedRewardsData] = useState([]);
-
-    const [isLoading, setIsLoading] = useState(true);
-    const [error, setError] = useState('');
-    const [currentUserId, setCurrentUserId] = useState(null);
-
-    useEffect(() => {
-        const unsubscribe = onAuthStateChanged(auth, async (user) => {
-            if (user) {
-                setCurrentUser(user);
-                setCurrentUserId(user.uid);
-            } else {
-                try {
-                    if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-                        await signInWithCustomToken(auth, __initial_auth_token);
-                    } else {
-                        await signInAnonymously(auth);
-                    }
-                } catch (authError) {
-                    console.error("Authentication error:", authError);
-                    setError("Failed to authenticate. Please try again later.");
-                }
-            }
-            setIsAuthReady(true);
-        });
-        return () => unsubscribe();
-    }, []);
-
-    useEffect(() => {
-        if (!isAuthReady || !currentUser) {
-            setIsLoading(false);
-            return;
-        }
-        
-        setIsLoading(true);
-        const collectionsToFetch = [
-            { path: kidsCollectionPath, setter: setKids, orderByField: "name" },
-            { path: tasksCollectionPath, setter: setTasks, orderByField: "createdAt" },
-            { path: rewardsCollectionPath, setter: setRewards, orderByField: "createdAt" },
-            { path: completedTasksCollectionPath, setter: setCompletedTasks, orderByField: "dateSubmitted" },
-            { path: redeemedRewardsCollectionPath, setter: setRedeemedRewardsData, orderByField: "dateRedeemed" },
-        ];
-
-        const unsubscribes = collectionsToFetch.map(col => {
-            const q = col.orderByField ? query(collection(db, col.path)) : query(collection(db, col.path)); // Removed orderBy for now
-            return onSnapshot(q, (snapshot) => {
-                const dataList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-                col.setter(dataList);
-            }, (err) => {
-                console.error(`Error fetching ${col.path}:`, err);
-                setError(`Failed to load data from ${col.path}.`);
-            });
-        });
-        
-        setIsLoading(false); 
-        return () => unsubscribes.forEach(unsub => unsub());
-    }, [isAuthReady, currentUser]);
-
-    const handleParentAccess = () => {
-        setAuthAttempt('parentPin');
-        setPinInput('');
-        setPinError('');
-    };
-
-    const handleKidSelectForPin = (kid) => {
-        setSelectedKidForPin(kid);
-        setAuthAttempt('kidPin');
-        setPinInput('');
-        setPinError('');
-    };
-
-    const handlePinSubmit = () => {
-        setPinError('');
-        if (authAttempt === 'parentPin') {
-            if (pinInput === PARENT_PIN) {
-                setRole('parent');
-                setAuthAttempt(null);
-            } else {
-                setPinError('Incorrect Parent PIN.');
-            }
-        } else if (authAttempt === 'kidPin' && selectedKidForPin) {
-            if (pinInput === selectedKidForPin.pin) {
-                setRole(selectedKidForPin); // Set role to the kid object
-                setAuthAttempt(null);
-                setSelectedKidForPin(null);
-            } else {
-                setPinError('Incorrect PIN for ' + selectedKidForPin.name + '.');
-            }
-        }
-        setPinInput('');
-    };
-    
-    const handleLogout = () => {
-        setRole(null);
-        setAuthAttempt(null);
-        setSelectedKidForPin(null);
-        setPinInput('');
-        setPinError('');
-    };
-    
-    if (!isAuthReady) return <div className="flex items-center justify-center min-h-screen bg-gray-100"><div className="text-xl font-semibold">Initializing App...</div></div>;
-    if (isLoading && isAuthReady && currentUser) return <div className="flex items-center justify-center min-h-screen bg-gray-100"><div className="text-xl font-semibold">Loading Data...</div></div>;
-    if (error) return <div className="flex items-center justify-center min-h-screen bg-gray-100"><div className="text-xl font-semibold text-red-500 p-4 bg-red-100 rounded-md">{error}</div></div>;
-
-    if (!role) { // Show login/selection screen
-        if (authAttempt) { // PIN Entry Screen
-            return (
-                <div className="min-h-screen bg-gradient-to-br from-gray-700 to-gray-900 flex flex-col items-center justify-center p-4">
-                    <Card className="w-full max-w-sm">
-                        <h2 className="text-2xl font-semibold text-gray-700 mb-6 text-center">
-                            Enter PIN for {authAttempt === 'parentPin' ? 'Parent Access' : selectedKidForPin?.name}
-                        </h2>
-                        <InputField
-                            label="PIN"
-                            type="password"
-                            value={pinInput}
-                            onChange={e => setPinInput(e.target.value)}
-                            placeholder="Enter 4-digit PIN"
-                            maxLength="4"
-                        />
-                        {pinError && <p className="text-red-500 text-sm mb-3 text-center">{pinError}</p>}
-                        <Button onClick={handlePinSubmit} className="w-full bg-green-500 hover:bg-green-600 mb-3" icon={LockKeyhole}>
-                            Submit PIN
-                        </Button>
-                        <Button onClick={() => { setAuthAttempt(null); setPinError(''); }} className="w-full bg-gray-400 hover:bg-gray-500" icon={LogOut}>
-                            Back
-                        </Button>
-                    </Card>
-                </div>
-            );
-        }
-
-        // Initial Role/Kid Selection Screen
-        return (
-            <div className="min-h-screen bg-gradient-to-br from-purple-600 to-blue-500 flex flex-col items-center justify-center p-4">
-                <div className="text-center mb-12">
-                    <h1 className="text-5xl font-bold text-white mb-4">Kids Chore & Reward</h1>
-                    <p className="text-xl text-purple-200">Welcome! Please select your role or profile.</p>
-                    {currentUserId && <p className="text-xs text-purple-300 mt-2">App ID: {appId} | User ID: {currentUserId}</p>}
-                </div>
-                <Card className="w-full max-w-md">
-                    <h2 className="text-2xl font-semibold text-gray-700 mb-6 text-center">Who are you?</h2>
-                    <Button onClick={handleParentAccess} className="w-full mb-4 bg-indigo-500 hover:bg-indigo-600" icon={ShieldCheck}>
-                        I'm a Parent
-                    </Button>
-                    <hr className="my-4"/>
-                    <h3 className="text-lg font-medium text-gray-600 mb-3 text-center">Or, select a Kid Profile:</h3>
-                    {kids.length > 0 ? (
-                        <div className="space-y-2">
-                            {kids.map(kid => (
-                                <Button key={kid.id} onClick={() => handleKidSelectForPin(kid)} className="w-full bg-green-500 hover:bg-green-600" icon={User}>
-                                    {kid.name}
-                                </Button>
-                            ))}
-                        </div>
-                    ) : (
-                        <p className="text-center text-gray-500">No kid profiles available. A parent needs to add them first (and set their PINs).</p>
-                    )}
-                </Card>
-            </div>
-        );
-    }
-
-    // Main App View (Parent or Kid Dashboard)
-    return (
-        <div className="min-h-screen bg-gray-100">
-            <header className="bg-white shadow-md sticky top-0 z-40">
-                <div className="container mx-auto px-4 py-3 flex justify-between items-center">
-                    <div className="flex items-center">
-                       <Award size={32} className="text-purple-600 mr-2" />
-                       <h1 className="text-2xl font-bold text-gray-700">Chore Rewards</h1>
-                    </div>
-                    <div className="flex items-center space-x-4">
-                        {currentUserId && <p className="text-xs text-gray-500 hidden sm:block">User ID: {currentUserId}</p>}
-                        <span className="px-3 py-1 text-sm font-semibold rounded-full bg-purple-100 text-purple-700">
-                            {role === 'parent' ? 'Parent View' : `Kid: ${role?.name}`}
-                        </span>
-                        <Button onClick={handleLogout} className="bg-gray-500 hover:bg-gray-600" icon={LogOut}>
-                            Logout
-                        </Button>
-                    </div>
-                </div>
-            </header>
-            <main className="container mx-auto p-4 sm:p-6">
-                {role === 'parent' && <ParentDashboard kids={kids} tasks={tasks} rewards={rewards} completedTasks={completedTasks} redeemedRewards={redeemedRewardsData} />}
-                {typeof role === 'object' && role?.id && <KidDashboard kid={role} tasks={tasks} rewards={rewards} completedTasks={completedTasks} redeemedRewards={redeemedRewardsData} />}
-            </main>
-            <footer className="text-center py-6 text-gray-500 text-sm">
-                <p>&copy; {new Date().getFullYear()} Chore Rewards App. App ID: {appId}</p>
-            </footer>
-        </div>
-    );
+    const [firebaseUser, setFirebaseUser] = useState(null); const [isAuthReady, setIsAuthReady] = useState(false); const [loggedInRole, setLoggedInRole] = useState(null); const [kids, setKids] = useState([]); const [tasks, setTasks] = useState([]); const [rewards, setRewards] = useState([]); const [completedTasks, setCompletedTasks] = useState([]); const [redeemedRewardsData, setRedeemedRewardsData] = useState([]); const [isLoading, setIsLoading] = useState(true); const [error, setError] = useState(''); const [currentFirebaseUid, setCurrentFirebaseUid] = useState(null); const [confirmModalState, setConfirmModalState] = useState({ isOpen: false, title: '', message: '', onConfirm: () => {}, children: null }); const showConfirmation = (title, message, onConfirmAction, confirmText = "Confirm", modalChildren = null) => { setConfirmModalState({ isOpen: true, title, message, onConfirm: onConfirmAction, confirmText, children: modalChildren }); }; const closeConfirmation = () => setConfirmModalState(prev => ({ ...prev, isOpen: false, children: null }));
+    useEffect(() => { const unsubscribe = onAuthStateChanged(auth, async (user) => { setIsLoading(true); if (user) { setFirebaseUser(user); setCurrentFirebaseUid(user.uid); if (!user.isAnonymous) { const userEmail = user.email?.toLowerCase(); if (PARENT_EMAILS.includes(userEmail)) { setLoggedInRole('parent'); } else { const q = query(collection(db, kidsCollectionPath), where("email", "==", userEmail)); const querySnapshot = await getDocs(q); if (!querySnapshot.empty) { const kidData = { id: querySnapshot.docs[0].id, ...querySnapshot.docs[0].data() }; setLoggedInRole(kidData); } else { setLoggedInRole(null); }}} else { setLoggedInRole(null);}} else { setFirebaseUser(null); setCurrentFirebaseUid(null); setLoggedInRole(null); try { if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) { await signInWithCustomToken(auth, __initial_auth_token); } else { await signInAnonymously(auth); }} catch (authError) { console.error("Anonymous/Custom sign-in error:", authError); setError("Failed to initialize session. Please refresh."); }}setIsAuthReady(true);}); return () => unsubscribe();}, []);
+    useEffect(() => { if (!isAuthReady || !firebaseUser) { setIsLoading(false); return; } setIsLoading(true); const collectionsToFetch = [ { path: kidsCollectionPath, setter: setKids }, { path: tasksCollectionPath, setter: setTasks }, { path: rewardsCollectionPath, setter: setRewards }, { path: completedTasksCollectionPath, setter: setCompletedTasks }, { path: redeemedRewardsCollectionPath, setter: setRedeemedRewardsData }, ]; const unsubscribes = collectionsToFetch.map(col => { const q = query(collection(db, col.path)); return onSnapshot(q, (snapshot) => { const dataList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })); col.setter(dataList);}, (err) => { console.error(`Error fetching ${col.path}:`, err); setError(`Failed to load data from ${col.path}. App ID: "${appId}". Error: ${err.message}`);});}); setIsLoading(false); return () => unsubscribes.forEach(unsub => unsub());}, [isAuthReady, firebaseUser]);
+    const handleLoginWithGoogle = async () => { const provider = new GoogleAuthProvider(); try { setError(''); await signInWithPopup(auth, provider); } catch (googleAuthError) { console.error("Google Sign-In Error:", googleAuthError); if (googleAuthError.code !== 'auth/popup-closed-by-user') { setError("Failed to sign in with Google. Please try again."); }}};
+    const handleLogout = async () => { try { await signOut(auth); setLoggedInRole(null); } catch (logoutError) { console.error("Error signing out: ", logoutError); setError("Failed to sign out. Please try again."); }};
+    if (!isAuthReady || (isLoading && !error)) { return <div className="flex items-center justify-center min-h-screen bg-gray-100"><div className="text-xl font-semibold">Initializing App & Loading Data...</div></div>; }
+    if (error) { return <div className="flex flex-col items-center justify-center min-h-screen bg-gray-100 p-4"><div className="text-xl font-semibold text-red-500 p-4 bg-red-100 rounded-md mb-4">{error}</div><Button onClick={() => window.location.reload()} className="bg-blue-500 hover:bg-blue-600">Refresh Page</Button></div>; }
+    if (!loggedInRole) { return (<div className="min-h-screen bg-gradient-to-br from-purple-600 to-blue-500 flex flex-col items-center justify-center p-4"><div className="text-center mb-12"><Award size={60} className="text-yellow-300 mx-auto mb-4" /><h1 className="text-5xl font-bold text-white mb-4">Kids Chore & Reward</h1><p className="text-xl text-purple-200">Login with Google to continue.</p>{currentFirebaseUid && <p className="text-xs text-purple-300 mt-2">Session Active</p>}</div><Card className="w-full max-w-md"><h2 className="text-2xl font-semibold text-gray-700 mb-6 text-center">Sign In</h2><Button onClick={handleLoginWithGoogle} className="w-full mb-4 bg-red-500 hover:bg-red-600 text-white" icon={LogIn}>Login with Google</Button><p className="text-xs text-gray-500 text-center mt-4">Parents and Kids with registered emails can log in here.</p></Card>{PARENT_EMAILS.length === 0 && process.env.NODE_ENV === 'development' && (<p className="mt-4 text-sm text-yellow-300 bg-black bg-opacity-20 p-2 rounded">Dev Note: No parent emails configured. Set REACT_APP_PARENT_EMAILS.</p>)}</div>); }
+    return (<div className="min-h-screen bg-gray-100"><header className="bg-white shadow-md sticky top-0 z-40"><div className="container mx-auto px-4 py-3 flex justify-between items-center"><div className="flex items-center"><Award size={32} className="text-purple-600 mr-2" /><h1 className="text-2xl font-bold text-gray-700">Chore Rewards</h1></div><div className="flex items-center space-x-4">{firebaseUser && !firebaseUser.isAnonymous && (<span className="text-sm text-gray-600 hidden sm:block">{loggedInRole === 'parent' ? `Parent: ${firebaseUser.displayName || firebaseUser.email}` : `Kid: ${loggedInRole?.name || firebaseUser.displayName}`}</span>)}<span className={`px-3 py-1 text-sm font-semibold rounded-full ${loggedInRole === 'parent' ? 'bg-purple-100 text-purple-700' : 'bg-green-100 text-green-700'}`}>{loggedInRole === 'parent' ? 'Parent View' : `Kid View`}</span><Button onClick={handleLogout} className="bg-gray-500 hover:bg-gray-600" icon={LogOut}>Logout</Button></div></div></header><main className="container mx-auto p-4 sm:p-6">{loggedInRole === 'parent' && <ParentDashboard kids={kids} tasks={tasks} rewards={rewards} completedTasks={completedTasks} redeemedRewardsData={redeemedRewardsData} firebaseUser={firebaseUser} showConfirmation={showConfirmation} />}{typeof loggedInRole === 'object' && loggedInRole?.id && <KidDashboard kidData={loggedInRole} allTasks={tasks} rewards={rewards} completedTasks={completedTasks} redeemedRewardsData={redeemedRewardsData} showConfirmation={showConfirmation} />}</main><ConfirmationModal isOpen={confirmModalState.isOpen} onClose={closeConfirmation} title={confirmModalState.title} message={confirmModalState.message} onConfirm={() => { confirmModalState.onConfirm(); closeConfirmation(); }} confirmText={confirmModalState.confirmText} children={confirmModalState.children} /><footer className="text-center py-6 text-gray-500 text-sm">&copy; {new Date().getFullYear()} Chore Rewards App. App ID: {appId}</footer></div>);
 }
 
+
 // --- Parent Dashboard ---
-const ParentDashboard = ({ kids, tasks, rewards, completedTasks, redeemedRewards }) => {
+const ParentDashboard = ({ kids, tasks, rewards, completedTasks, redeemedRewardsData, firebaseUser, showConfirmation }) => { // Pass redeemedRewardsData
     const [activeTab, setActiveTab] = useState('kids');
-    const pendingTasks = completedTasks.filter(task => task.status === 'pending');
+    const pendingTasks = completedTasks.filter(task => task.status === 'pending_approval');
+    const pendingFulfillmentRewards = redeemedRewardsData.filter(reward => reward.status === 'pending_fulfillment');
 
     const renderContent = () => {
         switch (activeTab) {
-            case 'kids': return <ManageKids kids={kids} />;
-            case 'tasks': return <ManageTasks tasks={tasks} kids={kids} />;
-            case 'rewards': return <ManageRewards rewards={rewards} />;
-            case 'approve': return <ApproveTasks pendingTasks={pendingTasks} kids={kids} tasks={tasks}/>;
-            case 'history': return <ParentRewardHistory redeemedRewards={redeemedRewards} completedTasks={completedTasks} kids={kids} rewards={rewards} tasks={tasks} />;
-            default: return <ManageKids kids={kids} />;
+            case 'kids': return <ManageKids kids={kids} showConfirmation={showConfirmation} />;
+            case 'tasks': return <ManageTasks tasks={tasks} kids={kids} showConfirmation={showConfirmation} />;
+            case 'rewards': return <ManageRewards rewards={rewards} showConfirmation={showConfirmation} />;
+            case 'approveTasks': return <ApproveTasks pendingTasks={pendingTasks} kids={kids} allTasks={tasks} showConfirmation={showConfirmation} firebaseUser={firebaseUser} />;
+            case 'fulfillRewards': return <FulfillRewards pendingRewards={pendingFulfillmentRewards} kids={kids} allRewards={rewards} showConfirmation={showConfirmation} firebaseUser={firebaseUser} />;
+            case 'history': return <ParentRewardHistory redeemedRewards={redeemedRewardsData} completedTasks={completedTasks} kids={kids} rewards={rewards} tasks={tasks} />;
+            default: return <ManageKids kids={kids} showConfirmation={showConfirmation}/>;
         }
     };
     
-    const NavItem = ({ tabName, icon: Icon, label, count }) => (
-        <button onClick={() => setActiveTab(tabName)} className={`flex items-center px-4 py-3 rounded-lg transition-colors duration-150 ${activeTab === tabName ? 'bg-purple-600 text-white shadow-md' : 'text-gray-600 hover:bg-purple-100'}`}>
-            <Icon size={20} className="mr-2" /> {label}
-            {count > 0 && <span className="ml-2 bg-red-500 text-white text-xs font-semibold px-2 py-0.5 rounded-full">{count}</span>}
-        </button>
-    );
+    const NavItem = ({ tabName, icon: Icon, label, count }) => ( <button onClick={() => setActiveTab(tabName)} className={`flex items-center px-3 py-2 sm:px-4 sm:py-3 rounded-lg transition-colors duration-150 text-sm sm:text-base ${activeTab === tabName ? 'bg-purple-600 text-white shadow-md' : 'text-gray-600 hover:bg-purple-100'}`}><Icon size={20} className="mr-2" /> {label}{count > 0 && <span className="ml-2 bg-red-500 text-white text-xs font-semibold px-2 py-0.5 rounded-full">{count}</span>}</button>);
 
-    return (
-        <div className="space-y-6">
-            <Card><h2 className="text-3xl font-semibold text-gray-800 mb-2">Parent Dashboard</h2><p className="text-gray-600">Manage chores, rewards, and your kids' progress.</p></Card>
-            <nav className="bg-white shadow rounded-lg p-2"><div className="flex flex-wrap gap-2">
-                <NavItem tabName="kids" icon={Users} label="Manage Kids" />
-                <NavItem tabName="tasks" icon={ClipboardList} label="Manage Tasks" />
-                <NavItem tabName="rewards" icon={Trophy} label="Manage Rewards" />
-                <NavItem tabName="approve" icon={Bell} label="Approve Tasks" count={pendingTasks.length} />
-                <NavItem tabName="history" icon={ListChecks} label="View History" />
-            </div></nav>
-            <div>{renderContent()}</div>
-        </div>
-    );
+    return ( <div className="space-y-6"><Card><h2 className="text-3xl font-semibold text-gray-800 mb-1">Parent Dashboard</h2>{firebaseUser && <p className="text-sm text-gray-500">Logged in as: {firebaseUser.displayName || firebaseUser.email}</p>}<p className="text-gray-600 mt-1">Manage chores, rewards, and your kids' progress.</p></Card><nav className="bg-white shadow rounded-lg p-2"><div className="flex flex-wrap gap-2"><NavItem tabName="kids" icon={Users} label="Kids" /><NavItem tabName="tasks" icon={ClipboardList} label="Tasks" /><NavItem tabName="rewards" icon={Trophy} label="Rewards" /><NavItem tabName="approveTasks" icon={Bell} label="Approve Tasks" count={pendingTasks.length} /><NavItem tabName="fulfillRewards" icon={PackageCheck} label="Fulfill Rewards" count={pendingFulfillmentRewards.length} /><NavItem tabName="history" icon={ListChecks} label="View History" /></div></nav><div>{renderContent()}</div></div>);
 };
 
-// --- Manage Kids (Parent) ---
-const ManageKids = ({ kids }) => {
-    const [isModalOpen, setIsModalOpen] = useState(false);
-    const [kidName, setKidName] = useState('');
-    const [kidPin, setKidPin] = useState('');
-    const [editingKid, setEditingKid] = useState(null); // For editing existing kid
-    const [formError, setFormError] = useState('');
+// --- Manage Kids (Parent) (Unchanged from v3) ---
+const ManageKids = ({ kids, showConfirmation }) => { const [isModalOpen, setIsModalOpen] = useState(false); const [kidName, setKidName] = useState(''); const [kidEmail, setKidEmail] = useState('');  const [editingKid, setEditingKid] = useState(null);  const [formError, setFormError] = useState(''); const openAddModal = () => { setEditingKid(null); setKidName(''); setKidEmail(''); setFormError(''); setIsModalOpen(true); }; const openEditModal = (kid) => { setEditingKid(kid); setKidName(kid.name); setKidEmail(kid.email || ''); setFormError(''); setIsModalOpen(true); }; const handleSaveKid = async () => { if (!kidName.trim()) { setFormError('Kid name is required.'); return; } if (kidEmail.trim() && !/\S+@\S+\.\S+/.test(kidEmail.trim())) { setFormError('Please enter a valid email address or leave it blank.'); return; } setFormError(''); const kidData = { name: kidName.trim(), email: kidEmail.trim().toLowerCase() || null }; try { if (editingKid) { await updateDoc(doc(db, kidsCollectionPath, editingKid.id), kidData); }  else { await addDoc(collection(db, kidsCollectionPath), { ...kidData, points: 0, createdAt: Timestamp.now() }); } setIsModalOpen(false); } catch (error) { console.error("Error saving kid: ", error); setFormError('Failed to save kid.'); } }; const [kidToDelete, setKidToDelete] = useState(null); const confirmDeleteKid = (kid) => { setKidToDelete(kid); showConfirmation( "Confirm Deletion", `Are you sure you want to delete kid "${kid.name}"? This action cannot be undone.`, handleDeleteKid ); }; const handleDeleteKid = async () => { if (!kidToDelete) return; try {  await deleteDoc(doc(db, kidsCollectionPath, kidToDelete.id));  setKidToDelete(null); }  catch (error) { console.error("Error deleting kid: ", error); setKidToDelete(null); } }; return ( <Card><div className="flex justify-between items-center mb-6"><h3 className="text-2xl font-semibold text-gray-700">Kids</h3><Button onClick={openAddModal} className="bg-green-500 hover:bg-green-600" icon={PlusCircle}>Add Kid</Button></div>{kids.length === 0 ? <p className="text-gray-500">No kids added yet.</p> : (<ul className="space-y-3">{kids.map(kid => (<li key={kid.id} className="flex flex-col sm:flex-row justify-between sm:items-center p-4 bg-gray-50 rounded-lg shadow-sm"><div><span className="font-medium text-lg text-gray-800">{kid.name}</span><span className="ml-4 text-sm text-purple-600 font-semibold">{kid.points || 0} points</span>{kid.email && <p className="text-xs text-gray-500 mt-1 flex items-center"><Mail size={12} className="mr-1"/> {kid.email}</p>}</div><div className="flex space-x-2 mt-2 sm:mt-0"><Button onClick={() => openEditModal(kid)} className="bg-blue-500 hover:bg-blue-600 px-3 py-1 text-sm" icon={Edit3}>Edit</Button><Button onClick={() => confirmDeleteKid(kid)} className="bg-red-500 hover:bg-red-600 px-3 py-1 text-sm" icon={Trash2}>Delete</Button></div></li>))}</ul>)}<Modal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} title={editingKid ? "Edit Kid" : "Add New Kid"}>{formError && <p className="text-red-500 text-sm mb-3">{formError}</p>}<InputField label="Kid's Name" value={kidName} onChange={e => setKidName(e.target.value)} placeholder="e.g., Alex" required /><InputField label="Kid's Email (Optional, for Google Login)" type="email" value={kidEmail} onChange={e => setKidEmail(e.target.value)} placeholder="e.g., alex@example.com" /><p className="text-xs text-gray-500 mb-3">If email is provided, the kid can log in using Google.</p><Button onClick={handleSaveKid} className="w-full bg-green-500 hover:bg-green-600">{editingKid ? "Save Changes" : "Add Kid"}</Button></Modal></Card>);};
 
-    const openAddModal = () => {
-        setEditingKid(null);
-        setKidName('');
-        setKidPin('');
-        setFormError('');
-        setIsModalOpen(true);
-    };
-
-    const openEditModal = (kid) => {
-        setEditingKid(kid);
-        setKidName(kid.name);
-        setKidPin(kid.pin || ''); // Use existing PIN or empty
-        setFormError('');
-        setIsModalOpen(true);
-    };
-
-    const handleSaveKid = async () => {
-        if (!kidName.trim() || !kidPin.trim() || kidPin.length !== 4 || !/^\d{4}$/.test(kidPin)) {
-            setFormError('Kid name is required and PIN must be 4 digits.');
-            return;
-        }
-        setFormError('');
-        try {
-            if (editingKid) { // Update existing kid
-                const kidRef = doc(db, kidsCollectionPath, editingKid.id);
-                await updateDoc(kidRef, { name: kidName.trim(), pin: kidPin });
-            } else { // Add new kid
-                await addDoc(collection(db, kidsCollectionPath), {
-                    name: kidName.trim(),
-                    pin: kidPin,
-                    points: 0,
-                    createdAt: Timestamp.now()
-                });
-            }
-            setIsModalOpen(false);
-        } catch (error) {
-            console.error("Error saving kid: ", error);
-            setFormError('Failed to save kid. Please try again.');
-        }
-    };
-    
-    // Delete Kid functionality (simplified, no cascading deletes for brevity here)
-    const [showConfirmDeleteModal, setShowConfirmDeleteModal] = useState(false);
-    const [kidToDelete, setKidToDelete] = useState(null);
-
-    const confirmDeleteKid = (kid) => {
-        setKidToDelete(kid);
-        setShowConfirmDeleteModal(true);
-    };
-    const handleDeleteKid = async () => {
-        if (!kidToDelete) return;
-        try {
-            // Consider implications: what happens to their completed tasks, redeemed rewards?
-            // For simplicity, we just delete the kid. In a real app, might archive or handle dependencies.
-            // Advanced: Delete associated data in a batch (as in previous versions)
-            await deleteDoc(doc(db, kidsCollectionPath, kidToDelete.id));
-        } catch (error) {
-            console.error("Error deleting kid: ", error);
-        } finally {
-            setShowConfirmDeleteModal(false);
-            setKidToDelete(null);
-        }
-    };
-
-
-    return (
-        <Card>
-            <div className="flex justify-between items-center mb-6">
-                <h3 className="text-2xl font-semibold text-gray-700">Kids</h3>
-                <Button onClick={openAddModal} className="bg-green-500 hover:bg-green-600" icon={PlusCircle}>Add Kid</Button>
-            </div>
-            {kids.length === 0 ? <p className="text-gray-500">No kids added yet.</p> : (
-                <ul className="space-y-3">
-                    {kids.map(kid => (
-                        <li key={kid.id} className="flex justify-between items-center p-4 bg-gray-50 rounded-lg shadow-sm">
-                            <div>
-                                <span className="font-medium text-lg text-gray-800">{kid.name}</span>
-                                <span className="ml-4 text-sm text-purple-600 font-semibold">{kid.points} points</span>
-                                <span className="ml-4 text-xs text-gray-500">(PIN: {kid.pin})</span>
-                            </div>
-                            <div className="flex space-x-2">
-                                <Button onClick={() => openEditModal(kid)} className="bg-blue-500 hover:bg-blue-600 px-3 py-1 text-sm" icon={Edit3}>Edit</Button>
-                                <Button onClick={() => confirmDeleteKid(kid)} className="bg-red-500 hover:bg-red-600 px-3 py-1 text-sm" icon={Trash2}>Delete</Button>
-                            </div>
-                        </li>
-                    ))}
-                </ul>
-            )}
-            <Modal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} title={editingKid ? "Edit Kid" : "Add New Kid"}>
-                {formError && <p className="text-red-500 text-sm mb-3">{formError}</p>}
-                <InputField label="Kid's Name" value={kidName} onChange={e => setKidName(e.target.value)} placeholder="e.g., Alex" required />
-                <InputField label="Kid's 4-Digit PIN" type="text" value={kidPin} onChange={e => setKidPin(e.target.value.replace(/\D/g, '').slice(0,4))} placeholder="e.g., 1234" required maxLength="4" />
-                <Button onClick={handleSaveKid} className="w-full bg-green-500 hover:bg-green-600">{editingKid ? "Save Changes" : "Add Kid"}</Button>
-            </Modal>
-            <Modal isOpen={showConfirmDeleteModal} onClose={() => setShowConfirmDeleteModal(false)} title="Confirm Deletion">
-                <p className="mb-4">Are you sure you want to delete kid "{kidToDelete?.name}"? This action cannot be undone and might affect task assignments and history.</p>
-                <div className="flex justify-end space-x-3">
-                    <Button onClick={() => setShowConfirmDeleteModal(false)} className="bg-gray-300 hover:bg-gray-400 text-gray-800">Cancel</Button>
-                    <Button onClick={handleDeleteKid} className="bg-red-500 hover:bg-red-600">Delete</Button>
-                </div>
-            </Modal>
-        </Card>
-    );
-};
 
 // --- Manage Tasks (Parent) ---
-const ManageTasks = ({ tasks, kids }) => {
-    const [isModalOpen, setIsModalOpen] = useState(false);
-    const [editingTask, setEditingTask] = useState(null);
-    const [taskName, setTaskName] = useState('');
-    const [taskPoints, setTaskPoints] = useState('');
-    const [recurrenceType, setRecurrenceType] = useState('none');
-    const [assignedKidId, setAssignedKidId] = useState(''); // Empty string for unassigned
-    const [formError, setFormError] = useState('');
+const ManageTasks = ({ tasks: allTasks, kids, showConfirmation }) => { 
+    const [isModalOpen, setIsModalOpen] = useState(false); const [editingTask, setEditingTask] = useState(null); const [formError, setFormError] = useState('');
+    const [sortConfig, setSortConfig] = useState({ key: 'name', direction: 'ascending' });
+    const initialFormState = { name: '', points: '1', recurrenceType: 'none', daysOfWeek: [], startDate: new Date().toISOString().split('T')[0], customDueDate: '', assignedKidId: '' }; // Default points to '1'
+    const [formData, setFormData] = useState(initialFormState);
+    const recurrenceOptions = [ { value: 'none', label: 'None (One-time or specific due date)' },{ value: 'daily', label: 'Daily' },{ value: 'weekly', label: 'Weekly' },{ value: 'monthly', label: 'Monthly (based on start date)' }];
+    const kidOptions = [ { value: '', label: 'Unassigned (Any Kid)' }, ...kids.map(k => ({ value: k.id, label: k.name }))];
+    const handleInputChange = (e) => { /* Unchanged from v3 */ const { name, value } = e.target; setFormData(prev => { const newState = { ...prev, [name]: value }; if (name === "startDate" && newState.recurrenceType === "weekly") { const newStartDateDay = DAYS_OF_WEEK[new Date(value + 'T00:00:00').getDay()]; if (newStartDateDay && !newState.daysOfWeek.includes(newStartDateDay)) { newState.daysOfWeek = [...newState.daysOfWeek, newStartDateDay]; }} if (name === "recurrenceType" && value !== "weekly") {newState.daysOfWeek = [];} return newState; }); };
+    const handlePointChange = (amount) => { /* Unchanged from v3 */ setFormData(prev => ({...prev, points: Math.max(1, (parseInt(prev.points) || 1) + amount).toString() })); };
+    const openAddModal = () => { /* Unchanged from v3 */ setEditingTask(null); setFormData({...initialFormState, startDate: new Date().toISOString().split('T')[0]}); setFormError(''); setIsModalOpen(true); };
+    const openEditModal = (task) => { /* Unchanged from v3 */ setEditingTask(task); setFormData({ name: task.name, points: task.points.toString(), recurrenceType: task.recurrenceType || 'none', daysOfWeek: task.daysOfWeek || [], startDate: task.startDate ? new Date(task.startDate + 'T00:00:00').toISOString().split('T')[0] : new Date().toISOString().split('T')[0], customDueDate: task.customDueDate ? new Date(task.customDueDate + 'T00:00:00').toISOString().split('T')[0] : '', assignedKidId: task.assignedKidId || '', }); setFormError(''); setIsModalOpen(true); };
+    const handleSaveTask = async () => { /* Unchanged from v3 */ if (!formData.name.trim() || !formData.points || isNaN(parseInt(formData.points)) || parseInt(formData.points) <= 0) { setFormError('Task name and a positive point value are required.'); return; } if (formData.recurrenceType === 'weekly' && formData.daysOfWeek.length === 0) { setFormError('Please select at least one day for weekly recurrence.'); return; } if (!formData.startDate) { setFormError('Start date is required.'); return; } if (formData.recurrenceType === 'none' && !formData.customDueDate) { setFormError('For non-recurring tasks, a specific Due Date is required.'); return; } if (formData.customDueDate && new Date(formData.customDueDate) < new Date(formData.startDate)) { setFormError('Due date cannot be before start date.'); return; } setFormError(''); const taskData = { name: formData.name.trim(), points: parseInt(formData.points), recurrenceType: formData.recurrenceType, daysOfWeek: formData.recurrenceType === 'weekly' ? formData.daysOfWeek : [], startDate: formData.startDate, customDueDate: formData.recurrenceType === 'none' && formData.customDueDate ? formData.customDueDate : null, assignedKidId: formData.assignedKidId || null, isActive: true, }; const baseDateForCalc = taskData.recurrenceType === 'none' ? new Date(taskData.customDueDate) : new Date(taskData.startDate); taskData.nextDueDate = calculateNextDueDate({ ...taskData }, baseDateForCalc); try { if (editingTask) { await updateDoc(doc(db, tasksCollectionPath, editingTask.id), taskData); }  else { taskData.createdAt = Timestamp.now(); await addDoc(collection(db, tasksCollectionPath), taskData); } setIsModalOpen(false); } catch (error) { console.error("Error saving task: ", error); setFormError(`Failed to save task: ${error.message}`); } };
+    const [taskToDelete, setTaskToDelete] = useState(null); const confirmDeleteTask = (task) => { setTaskToDelete(task); showConfirmation("Confirm Deletion", `Are you sure you want to delete task "${task.name}"?`, handleDeleteTask); }; const handleDeleteTask = async () => { /* Unchanged from v3 */ if(!taskToDelete) return; try { await deleteDoc(doc(db, tasksCollectionPath, taskToDelete.id)); setTaskToDelete(null); } catch (error) { console.error("Error deleting task: ", error); setTaskToDelete(null); } };
+    const sortedTasks = useMemo(() => { /* Unchanged from v3 */ let sortableItems = [...allTasks]; if (sortConfig.key !== null) { sortableItems.sort((a, b) => { if (a[sortConfig.key] < b[sortConfig.key]) return sortConfig.direction === 'ascending' ? -1 : 1; if (a[sortConfig.key] > b[sortConfig.key]) return sortConfig.direction === 'ascending' ? 1 : -1; return 0; }); } return sortableItems; }, [allTasks, sortConfig]);
+    const requestSort = (key) => { /* Unchanged from v3 */ let direction = 'ascending'; if (sortConfig.key === key && sortConfig.direction === 'ascending') { direction = 'descending'; } setSortConfig({ key, direction }); };
+    const getSortIcon = (key) => { /* Unchanged from v3 */ if (sortConfig.key !== key) return <ChevronsUpDown size={16} className="ml-1 opacity-40" />; return sortConfig.direction === 'ascending' ? <ArrowUpCircle size={16} className="ml-1" /> : <ArrowDownCircle size={16} className="ml-1" />; };
+    return ( /* Unchanged structure from v3 */ <Card><div className="flex flex-col sm:flex-row justify-between items-center mb-6 gap-2"><h3 className="text-2xl font-semibold text-gray-700">Tasks</h3><div className="flex items-center gap-2"><span className="text-sm text-gray-600">Sort by:</span><Button onClick={() => requestSort('name')} className="bg-gray-200 hover:bg-gray-300 text-gray-700 px-3 py-1 text-sm" icon={null}>Name {getSortIcon('name')}</Button><Button onClick={() => requestSort('points')} className="bg-gray-200 hover:bg-gray-300 text-gray-700 px-3 py-1 text-sm" icon={null}>Points {getSortIcon('points')}</Button><Button onClick={openAddModal} className="bg-teal-500 hover:bg-teal-600" icon={PlusCircle}>Add Task</Button></div></div>{sortedTasks.length === 0 ? <p className="text-gray-500">No tasks defined yet.</p> : (<ul className="space-y-3">{sortedTasks.map(task => { const assignedKid = kids.find(k => k.id === task.assignedKidId); let recurrenceDisplay = task.recurrenceType || 'None'; if (task.recurrenceType === 'weekly' && task.daysOfWeek?.length > 0) { recurrenceDisplay = `Weekly (${task.daysOfWeek.map(d => DAY_LABELS_SHORT[DAYS_OF_WEEK.indexOf(d)] || d).join(', ')})`; } else if (task.recurrenceType !== 'none') { recurrenceDisplay = task.recurrenceType.charAt(0).toUpperCase() + task.recurrenceType.slice(1); } return (<li key={task.id} className="p-4 bg-gray-50 rounded-lg shadow-sm"><div className="flex flex-col sm:flex-row justify-between sm:items-start"><div><span className="font-medium text-lg text-gray-800">{task.name}</span><span className="ml-4 text-sm text-teal-600 font-semibold">{task.points} points</span><p className="text-xs text-gray-500 mt-1">Recurrence: <span className="font-medium">{recurrenceDisplay}</span></p><p className="text-xs text-gray-500">Starts: <span className="font-medium">{task.startDate ? new Date(task.startDate + 'T00:00:00').toLocaleDateString() : 'N/A'}</span>{task.customDueDate && task.recurrenceType === 'none' && ` | Due: ${new Date(task.customDueDate + 'T00:00:00').toLocaleDateString()}`}</p>{task.nextDueDate && task.recurrenceType !== 'none' && (<p className="text-xs text-gray-500">Next Due: <span className="font-medium">{task.nextDueDate.toDate().toLocaleDateString()}</span></p>)}<p className="text-xs text-gray-500">Assigned to: <span className="font-medium">{assignedKid ? assignedKid.name : 'Any Kid'}</span></p></div><div className="flex space-x-2 mt-2 sm:mt-0 flex-shrink-0"><Button onClick={() => openEditModal(task)} className="bg-blue-500 hover:bg-blue-600 px-3 py-1 text-sm" icon={Edit3}>Edit</Button><Button onClick={() => confirmDeleteTask(task)} className="bg-red-500 hover:bg-red-600 px-3 py-1 text-sm" icon={Trash2}>Delete</Button></div></div></li>);})}</ul>)}<Modal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} title={editingTask ? "Edit Task" : "Add New Task"} size="max-w-lg">{formError && <p className="text-red-500 text-sm mb-3 p-2 bg-red-100 rounded">{formError}</p>}<InputField label="Task Name" name="name" value={formData.name} onChange={handleInputChange} placeholder="e.g., Clean room" required /><div className="mb-4"><label className="block text-sm font-medium text-gray-700 mb-1">Points</label><div className="flex items-center space-x-2"><Button onClick={() => handlePointChange(-1)} icon={ArrowDownCircle} className="bg-red-400 hover:bg-red-500 px-2 py-1 text-sm" disabled={parseInt(formData.points) <= 1}/><input type="number" name="points" value={formData.points} onChange={handleInputChange} placeholder="e.g., 10" required min="1" className="w-20 text-center px-2 py-1 border border-gray-300 rounded-md focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"/><Button onClick={() => handlePointChange(1)} icon={ArrowUpCircle} className="bg-green-400 hover:bg-green-500 px-2 py-1 text-sm"/></div></div><InputField label="Start Date" name="startDate" type="date" value={formData.startDate} onChange={handleInputChange} required /><SelectField label="Recurrence" name="recurrenceType" value={formData.recurrenceType} onChange={handleInputChange} options={recurrenceOptions} />{formData.recurrenceType === 'weekly' && ( <DayOfWeekSelector selectedDays={formData.daysOfWeek} onChange={handleInputChange} /> )}{formData.recurrenceType === 'none' && ( <InputField label="Specific Due Date (for Non-Recurring)" name="customDueDate" type="date" value={formData.customDueDate} onChange={handleInputChange} /> )}<SelectField label="Assign to Kid" name="assignedKidId" value={formData.assignedKidId} onChange={handleInputChange} options={kidOptions} placeholder="Unassigned (Any Kid)" /><Button onClick={handleSaveTask} className="w-full mt-4 bg-teal-500 hover:bg-teal-600">{editingTask ? "Save Changes" : "Add Task"}</Button></Modal></Card>);};
 
-    const recurrenceOptions = [
-        { value: 'none', label: 'None (One-time)' },
-        { value: 'daily', label: 'Daily' },
-        { value: 'weekly', label: 'Weekly' },
-        { value: 'monthly', label: 'Monthly' },
-    ];
-    const kidOptions = [{ value: '', label: 'Unassigned (Any Kid)' }, ...kids.map(k => ({ value: k.id, label: k.name }))];
+// --- Manage Rewards (Parent) ---
+const ManageRewards = ({ rewards: allRewards, showConfirmation }) => { // Renamed rewards -> allRewards
+    const [isModalOpen, setIsModalOpen] = useState(false); const [rewardName, setRewardName] = useState(''); const [rewardCost, setRewardCost] = useState(''); const [formError, setFormError] = useState('');
+    const [sortConfig, setSortConfig] = useState({ key: 'pointCost', direction: 'descending' }); // Default sort
 
-
-    const openAddModal = () => {
-        setEditingTask(null);
-        setTaskName('');
-        setTaskPoints('');
-        setRecurrenceType('none');
-        setAssignedKidId('');
-        setFormError('');
-        setIsModalOpen(true);
-    };
-    const openEditModal = (task) => {
-        setEditingTask(task);
-        setTaskName(task.name);
-        setTaskPoints(task.points.toString());
-        setRecurrenceType(task.recurrenceType || 'none');
-        setAssignedKidId(task.assignedKidId || '');
-        setFormError('');
-        setIsModalOpen(true);
-    };
-
-    const handleSaveTask = async () => {
-        if (!taskName.trim() || !taskPoints || isNaN(parseInt(taskPoints)) || parseInt(taskPoints) <= 0) {
-            setFormError('Task name and a positive point value are required.');
-            return;
-        }
-        setFormError('');
-        const taskData = {
-            name: taskName.trim(),
-            points: parseInt(taskPoints),
-            recurrenceType,
-            assignedKidId: assignedKidId || null, // Store null if unassigned
-            isActive: true, // New tasks are active by default
-            nextDueDate: recurrenceType !== 'none' ? Timestamp.fromDate(getStartOfDay(new Date())) : null, // Set initial nextDueDate for recurring tasks
-        };
-
-        try {
-            if (editingTask) {
-                const taskRef = doc(db, tasksCollectionPath, editingTask.id);
-                // If recurrence changed from recurring to none, clear nextDueDate
-                if (editingTask.recurrenceType !== 'none' && taskData.recurrenceType === 'none') {
-                    taskData.nextDueDate = null;
-                } else if (taskData.recurrenceType !== 'none' && (!editingTask.nextDueDate || editingTask.recurrenceType !== taskData.recurrenceType)) {
-                    // If it's newly recurring or type changed, set initial nextDueDate
-                    taskData.nextDueDate = Timestamp.fromDate(getStartOfDay(new Date()));
-                } else if (taskData.recurrenceType !== 'none') {
-                    taskData.nextDueDate = editingTask.nextDueDate; // Preserve existing if type didn't change to none
-                }
-
-                await updateDoc(taskRef, taskData);
-            } else {
-                taskData.createdAt = Timestamp.now();
-                await addDoc(collection(db, tasksCollectionPath), taskData);
-            }
-            setIsModalOpen(false);
-        } catch (error) {
-            console.error("Error saving task: ", error);
-            setFormError('Failed to save task. Please try again.');
-        }
+    const handleAddReward = async () => { 
+        setFormError(''); if (!rewardName.trim() || !rewardCost || isNaN(parseInt(rewardCost)) || parseInt(rewardCost) <= 0) { setFormError("Reward name and a positive point cost are required."); return; } 
+        try { 
+            await addDoc(collection(db, rewardsCollectionPath), { name: rewardName.trim(), pointCost: parseInt(rewardCost), isAvailable: true, createdAt: Timestamp.now() }); // Added createdAt
+            setRewardName(''); setRewardCost(''); setIsModalOpen(false); 
+        } catch (error) { console.error("Error adding reward: ", error); setFormError("Failed to add reward."); } 
     };
     
-    // Delete Task functionality
-    const [showConfirmDeleteModal, setShowConfirmDeleteModal] = useState(false);
-    const [taskToDelete, setTaskToDelete] = useState(null);
-    const confirmDeleteTask = (task) => { setTaskToDelete(task); setShowConfirmDeleteModal(true); };
-    const handleDeleteTask = async () => {
-        if(!taskToDelete) return;
-        try { await deleteDoc(doc(db, tasksCollectionPath, taskToDelete.id)); }
-        catch (error) { console.error("Error deleting task: ", error); }
-        finally { setShowConfirmDeleteModal(false); setTaskToDelete(null); }
-    };
-
-
-    return (
-        <Card>
-            <div className="flex justify-between items-center mb-6">
-                <h3 className="text-2xl font-semibold text-gray-700">Tasks</h3>
-                <Button onClick={openAddModal} className="bg-teal-500 hover:bg-teal-600" icon={PlusCircle}>Add Task</Button>
-            </div>
-             {tasks.length === 0 ? <p className="text-gray-500">No tasks defined yet.</p> : (
-                <ul className="space-y-3">
-                    {tasks.map(task => {
-                        const assignedKid = kids.find(k => k.id === task.assignedKidId);
-                        return (
-                            <li key={task.id} className="p-4 bg-gray-50 rounded-lg shadow-sm">
-                                <div className="flex justify-between items-start">
-                                    <div>
-                                        <span className="font-medium text-lg text-gray-800">{task.name}</span>
-                                        <span className="ml-4 text-sm text-teal-600 font-semibold">{task.points} points</span>
-                                        <p className="text-xs text-gray-500 mt-1">
-                                            Recurrence: <span className="font-medium">{task.recurrenceType || 'None'}</span>
-                                            {task.nextDueDate && ` | Next Due: ${task.nextDueDate.toDate().toLocaleDateString()}`}
-                                        </p>
-                                        <p className="text-xs text-gray-500">
-                                            Assigned to: <span className="font-medium">{assignedKid ? assignedKid.name : 'Any Kid'}</span>
-                                        </p>
-                                    </div>
-                                    <div className="flex space-x-2 flex-shrink-0">
-                                        <Button onClick={() => openEditModal(task)} className="bg-blue-500 hover:bg-blue-600 px-3 py-1 text-sm" icon={Edit3}>Edit</Button>
-                                        <Button onClick={() => confirmDeleteTask(task)} className="bg-red-500 hover:bg-red-600 px-3 py-1 text-sm" icon={Trash2}>Delete</Button>
-                                    </div>
-                                </div>
-                            </li>
-                        );
-                    })}
-                </ul>
-            )}
-            <Modal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} title={editingTask ? "Edit Task" : "Add New Task"}>
-                {formError && <p className="text-red-500 text-sm mb-3">{formError}</p>}
-                <InputField label="Task Name" value={taskName} onChange={e => setTaskName(e.target.value)} placeholder="e.g., Clean room" required />
-                <InputField label="Points" type="number" value={taskPoints} onChange={e => setTaskPoints(e.target.value)} placeholder="e.g., 10" required />
-                <SelectField label="Recurrence" value={recurrenceType} onChange={e => setRecurrenceType(e.target.value)} options={recurrenceOptions} />
-                <SelectField label="Assign to Kid" value={assignedKidId} onChange={e => setAssignedKidId(e.target.value)} options={kidOptions} placeholder="Unassigned (Any Kid)" />
-                <Button onClick={handleSaveTask} className="w-full bg-teal-500 hover:bg-teal-600">{editingTask ? "Save Changes" : "Add Task"}</Button>
-            </Modal>
-            <Modal isOpen={showConfirmDeleteModal} onClose={() => setShowConfirmDeleteModal(false)} title="Confirm Deletion">
-                <p className="mb-4">Are you sure you want to delete task "{taskToDelete?.name}"? This action cannot be undone.</p>
-                <div className="flex justify-end space-x-3">
-                    <Button onClick={() => setShowConfirmDeleteModal(false)} className="bg-gray-300 hover:bg-gray-400 text-gray-800">Cancel</Button>
-                    <Button onClick={handleDeleteTask} className="bg-red-500 hover:bg-red-600">Delete</Button>
-                </div>
-            </Modal>
-        </Card>
-    );
-};
-
-// --- Manage Rewards (Parent) - (Largely unchanged, ensure delete confirmation) ---
-const ManageRewards = ({ rewards }) => {
-    const [isModalOpen, setIsModalOpen] = useState(false);
-    const [rewardName, setRewardName] = useState('');
-    const [rewardCost, setRewardCost] = useState('');
-    const [formError, setFormError] = useState('');
-    // Editing state (optional, can be added if needed)
-    // const [editingReward, setEditingReward] = useState(null); 
-
-    const handleAddReward = async () => {
-        setFormError('');
-        if (!rewardName.trim() || !rewardCost || isNaN(parseInt(rewardCost)) || parseInt(rewardCost) <= 0) {
-            setFormError("Reward name and a positive point cost are required.");
-            return;
-        }
-        try {
-            await addDoc(collection(db, rewardsCollectionPath), {
-                name: rewardName.trim(),
-                pointCost: parseInt(rewardCost),
-                isAvailable: true,
-                createdAt: Timestamp.now()
-            });
-            setRewardName('');
-            setRewardCost('');
-            setIsModalOpen(false);
-        } catch (error) {
-            console.error("Error adding reward: ", error);
-            setFormError("Failed to add reward. Please try again.");
-        }
-    };
-    
-    const [showConfirmDeleteModal, setShowConfirmDeleteModal] = useState(false);
     const [rewardToDelete, setRewardToDelete] = useState(null);
-    const confirmDeleteReward = (reward) => { setRewardToDelete(reward); setShowConfirmDeleteModal(true); };
-    const handleDeleteReward = async () => {
-        if(!rewardToDelete) return;
-        try { await deleteDoc(doc(db, rewardsCollectionPath, rewardToDelete.id)); }
-        catch (error) { console.error("Error deleting reward: ", error); }
-        finally { setShowConfirmDeleteModal(false); setRewardToDelete(null); }
-    };
+    const confirmDeleteReward = (reward) => { setRewardToDelete(reward); showConfirmation("Confirm Deletion", `Are you sure you want to delete reward "${reward.name}"?`, () => handleDeleteReward(reward.id)); }; // Pass ID directly
+    const handleDeleteReward = async (rewardId) => { if(!rewardId) return; try { await deleteDoc(doc(db, rewardsCollectionPath, rewardId)); setRewardToDelete(null); } catch (error) { console.error("Error deleting reward: ", error); setRewardToDelete(null); } };
+    
+    const sortedRewards = useMemo(() => {
+        let sortableItems = [...allRewards];
+        if (sortConfig.key) {
+            sortableItems.sort((a, b) => {
+                let valA = a[sortConfig.key];
+                let valB = b[sortConfig.key];
+                if (sortConfig.key === 'createdAt' && valA?.toDate && valB?.toDate) { // Sort by date if Timestamps
+                    valA = valA.toMillis();
+                    valB = valB.toMillis();
+                }
+                if (valA < valB) return sortConfig.direction === 'ascending' ? -1 : 1;
+                if (valA > valB) return sortConfig.direction === 'ascending' ? 1 : -1;
+                return 0;
+            });
+        }
+        return sortableItems;
+    }, [allRewards, sortConfig]);
 
-    return (
+    const requestSort = (key) => {
+        let direction = 'ascending';
+        if (sortConfig.key === key && sortConfig.direction === 'ascending') { direction = 'descending'; }
+        else if (sortConfig.key === key && sortConfig.direction === 'descending') { direction = 'ascending';} // Toggle back for same key
+        setSortConfig({ key, direction });
+    };
+    const getSortIcon = (key) => { if (sortConfig.key !== key) return <ChevronsUpDown size={16} className="ml-1 opacity-40" />; return sortConfig.direction === 'ascending' ? <ArrowUpCircle size={16} className="ml-1" /> : <ArrowDownCircle size={16} className="ml-1" />; };
+
+    return ( 
         <Card>
-            <div className="flex justify-between items-center mb-6">
+            <div className="flex flex-col sm:flex-row justify-between items-center mb-6 gap-2">
                 <h3 className="text-2xl font-semibold text-gray-700">Rewards</h3>
-                <Button onClick={() => {setIsModalOpen(true); setFormError('');}} className="bg-yellow-500 hover:bg-yellow-600" icon={PlusCircle}>Add Reward</Button>
-            </div>
-            {rewards.length === 0 ? <p className="text-gray-500">No rewards defined yet.</p> : (
-                <ul className="space-y-3">
-                    {rewards.map(reward => (
-                        <li key={reward.id} className="flex justify-between items-center p-4 bg-gray-50 rounded-lg shadow-sm">
-                            <div>
-                                <span className="font-medium text-lg text-gray-800">{reward.name}</span>
-                                <span className="ml-4 text-sm text-yellow-700 font-semibold">{reward.pointCost} points</span>
-                            </div>
-                            <Button onClick={() => confirmDeleteReward(reward)} className="bg-red-500 hover:bg-red-600 px-3 py-1 text-sm" icon={Trash2}>Delete</Button>
-                        </li>
-                    ))}
-                </ul>
-            )}
-            <Modal isOpen={isModalOpen} onClose={() => {setIsModalOpen(false); setFormError('');}} title="Add New Reward">
-                {formError && <p className="text-red-500 text-sm mb-3">{formError}</p>}
-                <InputField label="Reward Name" value={rewardName} onChange={e => setRewardName(e.target.value)} placeholder="e.g., Extra screen time" required />
-                <InputField label="Point Cost" type="number" value={rewardCost} onChange={e => setRewardCost(e.target.value)} placeholder="e.g., 50" required />
-                <Button onClick={handleAddReward} className="w-full bg-yellow-500 hover:bg-yellow-600">Add Reward</Button>
-            </Modal>
-            <Modal isOpen={showConfirmDeleteModal} onClose={() => setShowConfirmDeleteModal(false)} title="Confirm Deletion">
-                <p className="mb-4">Are you sure you want to delete reward "{rewardToDelete?.name}"? This action cannot be undone.</p>
-                <div className="flex justify-end space-x-3">
-                    <Button onClick={() => setShowConfirmDeleteModal(false)} className="bg-gray-300 hover:bg-gray-400 text-gray-800">Cancel</Button>
-                    <Button onClick={handleDeleteReward} className="bg-red-500 hover:bg-red-600">Delete</Button>
+                <div className="flex items-center gap-2">
+                    <span className="text-sm text-gray-600">Sort by:</span>
+                    <Button onClick={() => requestSort('name')} className="bg-gray-200 hover:bg-gray-300 text-gray-700 px-3 py-1 text-sm" icon={null}>Name {getSortIcon('name')}</Button>
+                    <Button onClick={() => requestSort('pointCost')} className="bg-gray-200 hover:bg-gray-300 text-gray-700 px-3 py-1 text-sm" icon={null}>Points {getSortIcon('pointCost')}</Button>
+                    <Button onClick={() => requestSort('createdAt')} className="bg-gray-200 hover:bg-gray-300 text-gray-700 px-3 py-1 text-sm" icon={null}>Date {getSortIcon('createdAt')}</Button>
+                    <Button onClick={() => {setIsModalOpen(true); setFormError('');}} className="bg-yellow-500 hover:bg-yellow-600" icon={PlusCircle}>Add Reward</Button>
                 </div>
-            </Modal>
+            </div>
+            {sortedRewards.length === 0 ? <p className="text-gray-500">No rewards defined yet.</p> : (<ul className="space-y-3">{sortedRewards.map(reward => (<li key={reward.id} className="flex justify-between items-center p-4 bg-gray-50 rounded-lg shadow-sm"><div><span className="font-medium text-lg text-gray-800">{reward.name}</span><span className="ml-4 text-sm text-yellow-700 font-semibold">{reward.pointCost} points</span></div><Button onClick={() => confirmDeleteReward(reward)} className="bg-red-500 hover:bg-red-600 px-3 py-1 text-sm" icon={Trash2}>Delete</Button></li>))}</ul>)}
+            <Modal isOpen={isModalOpen} onClose={() => {setIsModalOpen(false); setFormError('');}} title="Add New Reward">{formError && <p className="text-red-500 text-sm mb-3">{formError}</p>}<InputField label="Reward Name" value={rewardName} onChange={e => setRewardName(e.target.value)} placeholder="e.g., Extra screen time" required /><InputField label="Point Cost" type="number" value={rewardCost} onChange={e => setRewardCost(e.target.value)} placeholder="e.g., 50" required min="1" /><Button onClick={handleAddReward} className="w-full bg-yellow-500 hover:bg-yellow-600">Add Reward</Button></Modal>
         </Card>
     );
 };
 
 // --- Approve Tasks (Parent) ---
-const ApproveTasks = ({ pendingTasks, kids, tasks }) => {
-    const handleApproveTask = async (completedTask) => {
+const ApproveTasks = ({ pendingTasks, kids, allTasks, showConfirmation, firebaseUser }) => { // Added firebaseUser
+    const [approvalNote, setApprovalNote] = useState(''); const [currentTaskForApproval, setCurrentTaskForApproval] = useState(null); const [pointsToAdjust, setPointsToAdjust] = useState(0);
+    const [reopenTaskFlag, setReopenTaskFlag] = useState(true); // Default to true
+    const openApprovalModal = (completedTask) => { setCurrentTaskForApproval(completedTask); setPointsToAdjust(completedTask.taskPoints); setApprovalNote(''); setReopenTaskFlag(true); }; // Default reopen to true
+    const closeApprovalModal = () => { setCurrentTaskForApproval(null); setApprovalNote(''); setPointsToAdjust(0); setReopenTaskFlag(false); };
+    const handleConfirmApprovalAction = (status) => { const actionText = status === 'approved' ? 'approve' : (reopenTaskFlag ? 'reject and reopen' : 'reject'); const title = status === 'approved' ? 'Confirm Approval' : 'Confirm Rejection'; showConfirmation( title, `Are you sure you want to ${actionText} this task submission for "${currentTaskForApproval?.taskName}"?`, () => processApprovalAction(status) ); };
+    const processApprovalAction = async (status) => {  if (!currentTaskForApproval) return;
         try {
-            const kidRef = doc(db, kidsCollectionPath, completedTask.kidId);
-            const completedTaskRef = doc(db, completedTasksCollectionPath, completedTask.id);
-            const mainTaskRef = doc(db, tasksCollectionPath, completedTask.taskId);
+            const kidRef = doc(db, kidsCollectionPath, currentTaskForApproval.kidId); const completedTaskRef = doc(db, completedTasksCollectionPath, currentTaskForApproval.id); const mainTaskRef = doc(db, tasksCollectionPath, currentTaskForApproval.taskId);
+            const kidDoc = await getDoc(kidRef); const mainTaskDoc = await getDoc(mainTaskRef);
+            if (!kidDoc.exists() || !mainTaskDoc.exists()) { console.error("Kid or Task document not found"); return; }
+            const currentKidPoints = kidDoc.data().points || 0; const mainTaskData = mainTaskDoc.data(); const batch = writeBatch(db);
+            const approverInfo = firebaseUser ? (firebaseUser.displayName || firebaseUser.email || firebaseUser.uid) : 'System'; // Log who did it
+            if (status === 'rejected' && reopenTaskFlag) { batch.delete(completedTaskRef); } 
+            else { const updateData = { status: status, approvalNote: approvalNote.trim() || null, dateApprovedOrRejected: Timestamp.now(), pointsAwarded: status === 'approved' ? pointsToAdjust : 0, processedBy: approverInfo }; batch.update(completedTaskRef, updateData); if (status === 'approved') { batch.update(kidRef, { points: currentKidPoints + pointsToAdjust }); } }
+            if (status === 'approved' && mainTaskData.recurrenceType && mainTaskData.recurrenceType !== 'none') { const newNextDueDate = calculateNextDueDate({ ...mainTaskData, startDate: new Date(mainTaskData.startDate), customDueDate: mainTaskData.customDueDate ? new Date(mainTaskData.customDueDate) : null, nextDueDate: currentTaskForApproval.taskDueDate }, currentTaskForApproval.taskDueDate.toDate()); if (newNextDueDate) { batch.update(mainTaskRef, { nextDueDate: newNextDueDate }); } }
+            await batch.commit(); closeApprovalModal();
+        } catch (error) { console.error(`Error ${status} task: `, error); } };
+    if (pendingTasks.length === 0) { return <Card><h3 className="text-2xl font-semibold text-gray-700 mb-6">Approve Tasks</h3><p className="text-gray-500">No tasks pending approval.</p></Card>; }
+    return ( <Card><h3 className="text-2xl font-semibold text-gray-700 mb-6">Approve Tasks</h3><ul className="space-y-4">{pendingTasks.map(ct => { const kid = kids.find(k => k.id === ct.kidId); if (!kid) return <li key={ct.id} className="text-red-500 p-3 bg-red-50 rounded-md">Kid data missing.</li>; return (<li key={ct.id} className="p-4 bg-gray-50 rounded-lg shadow-sm flex flex-col sm:flex-row justify-between items-start sm:items-center"><div className="mb-2 sm:mb-0"><p className="font-semibold text-lg text-gray-800">{kid.name} completed: <span className="text-blue-600">{ct.taskName}</span></p><p className="text-sm text-gray-500">Submitted: {ct.dateSubmitted?.toDate().toLocaleDateString()}</p><p className="text-sm text-gray-500">Originally Due: {ct.taskDueDate?.toDate().toLocaleDateString()}</p><p className="text-sm text-purple-600 font-semibold">Original Points: {ct.taskPoints}</p></div><Button onClick={() => openApprovalModal(ct)} className="bg-indigo-500 hover:bg-indigo-600" icon={Edit3}>Review</Button></li>);})}</ul><Modal isOpen={!!currentTaskForApproval} onClose={closeApprovalModal} title={`Review Task: ${currentTaskForApproval?.taskName}`}>{currentTaskForApproval && (<div><p><strong>Kid:</strong> {kids.find(k => k.id === currentTaskForApproval.kidId)?.name}</p><p><strong>Submitted:</strong> {currentTaskForApproval.dateSubmitted?.toDate().toLocaleString()}</p><p><strong>Original Due:</strong> {currentTaskForApproval.taskDueDate?.toDate().toLocaleDateString()}</p><div className="my-4"><label className="block text-sm font-medium text-gray-700 mb-1">Adjust Points (Original: {currentTaskForApproval.taskPoints})</label><div className="flex items-center space-x-2"><Button onClick={() => setPointsToAdjust(p => Math.max(0, p - 1))} icon={ArrowDownCircle} className="bg-red-500 hover:bg-red-600 px-2 py-1"/><input type="number" value={pointsToAdjust} onChange={e => setPointsToAdjust(Math.max(0, parseInt(e.target.value) || 0))} className="w-20 text-center px-2 py-1 border border-gray-300 rounded-md"/><Button onClick={() => setPointsToAdjust(p => p + 1)} icon={ArrowUpCircle} className="bg-green-500 hover:bg-green-600 px-2 py-1"/></div></div><TextAreaField label="Approval/Rejection Note (Optional)" value={approvalNote} onChange={e => setApprovalNote(e.target.value)} placeholder="e.g., Great job!" /><div className="mt-4 mb-2"><label className="flex items-center text-sm text-gray-600"><input type="checkbox" checked={reopenTaskFlag} onChange={(e) => setReopenTaskFlag(e.target.checked)} className="mr-2 h-4 w-4 text-indigo-600 border-gray-300 rounded focus:ring-indigo-500" />If rejecting, reopen task for kid to resubmit?</label></div><div className="flex justify-end space-x-3 mt-6"><Button onClick={() => handleConfirmApprovalAction('rejected')} className="bg-red-500 hover:bg-red-600" icon={ThumbsDown}>{reopenTaskFlag ? "Reject & Reopen" : "Reject Only"}</Button><Button onClick={() => handleConfirmApprovalAction('approved')} className="bg-green-500 hover:bg-green-600" icon={ThumbsUp}>Approve</Button></div></div>)}</Modal></Card>);};
 
-            const kidDoc = await getDoc(kidRef);
-            const mainTaskDoc = await getDoc(mainTaskRef);
+// --- Fulfill Rewards (Parent) --- New Component
+const FulfillRewards = ({ pendingRewards, kids, allRewards, showConfirmation, firebaseUser }) => {
+    const [rewardToProcess, setRewardToProcess] = useState(null);
+    const [cloneRewardOnFulfill, setCloneRewardOnFulfill] = useState(false);
+    const [cancellationNote, setCancellationNote] = useState("");
 
-            if (!kidDoc.exists()) {
-                console.error("Kid document not found for approval"); return;
-            }
-            if (!mainTaskDoc.exists()) {
-                console.error("Main task document not found for approval"); return;
-            }
-
-            const currentPoints = kidDoc.data().points || 0;
-            const taskData = mainTaskDoc.data();
-            const pointsToAward = completedTask.taskPoints || taskData.points; // Use points from completedTask if available (future-proofing)
-
-            const batch = writeBatch(db);
-            batch.update(kidRef, { points: currentPoints + pointsToAward });
-            batch.update(completedTaskRef, { status: 'approved', dateApproved: Timestamp.now() });
-            
-            // If the original task was recurring, update its nextDueDate
-            if (taskData.recurrenceType && taskData.recurrenceType !== 'none') {
-                const newNextDueDate = calculateNextDueDate(taskData);
-                if (newNextDueDate) {
-                    batch.update(mainTaskRef, { nextDueDate: newNextDueDate });
-                }
-            }
-            await batch.commit();
-
-        } catch (error) {
-            console.error("Error approving task: ", error);
-        }
+    const openFulfillModal = (redeemedReward) => {
+        setRewardToProcess(redeemedReward);
+        setCloneRewardOnFulfill(false); // Reset clone flag
     };
 
+    const openCancelModal = (redeemedReward) => {
+        setRewardToProcess(redeemedReward);
+        setCancellationNote(""); // Reset note
+    };
+
+    const closeModals = () => {
+        setRewardToProcess(null);
+        setCloneRewardOnFulfill(false);
+        setCancellationNote("");
+    };
+
+    const handleFulfill = async () => {
+        if (!rewardToProcess) return;
+        const originalRewardDetails = allRewards.find(r => r.id === rewardToProcess.rewardId);
+
+        showConfirmation(
+            "Confirm Fulfillment",
+            `Mark "${rewardToProcess.rewardName}" for ${kids.find(k=>k.id === rewardToProcess.kidId)?.name} as fulfilled?`,
+            async () => {
+                try {
+                    const batch = writeBatch(db);
+                    const redeemedRewardRef = doc(db, redeemedRewardsCollectionPath, rewardToProcess.id);
+                    batch.update(redeemedRewardRef, { 
+                        status: 'fulfilled', 
+                        dateFulfilled: Timestamp.now(),
+                        fulfilledBy: firebaseUser ? (firebaseUser.displayName || firebaseUser.email || firebaseUser.uid) : 'System',
+                    });
+
+                    if (cloneRewardOnFulfill && originalRewardDetails) {
+                        const newRewardData = { 
+                            ...originalRewardDetails, 
+                            name: `${originalRewardDetails.name}`, // Potentially add (copy) or ensure unique name logic if needed
+                            createdAt: Timestamp.now(),
+                            isAvailable: true, 
+                        };
+                        delete newRewardData.id; // Firestore generates new ID
+                        const newRewardRef = doc(collection(db, rewardsCollectionPath)); // Generate new doc ref
+                        batch.set(newRewardRef, newRewardData);
+                    }
+                    await batch.commit();
+                    closeModals();
+                } catch (error) { console.error("Error fulfilling reward:", error); /* TODO: Show error to user */ }
+            },
+            "Mark Fulfilled",
+            // Children for confirmation modal: clone checkbox
+            <div>
+                <label className="flex items-center text-sm text-gray-700 mt-2">
+                    <input type="checkbox" checked={cloneRewardOnFulfill} onChange={(e) => setCloneRewardOnFulfill(e.target.checked)} className="mr-2 h-4 w-4 text-indigo-600 border-gray-300 rounded focus:ring-indigo-500" />
+                    Re-list this reward for future redemption?
+                </label>
+            </div>
+        );
+    };
+    
+    const handleCancelRequest = async () => {
+        if (!rewardToProcess) return;
+        showConfirmation(
+            "Cancel Reward Request",
+            `Cancel request for "${rewardToProcess.rewardName}" by ${kids.find(k=>k.id === rewardToProcess.kidId)?.name}? Points will be returned.`,
+            async () => {
+                try {
+                    const batch = writeBatch(db);
+                    const redeemedRewardRef = doc(db, redeemedRewardsCollectionPath, rewardToProcess.id);
+                    const kidRef = doc(db, kidsCollectionPath, rewardToProcess.kidId);
+                    
+                    const kidDoc = await getDoc(kidRef);
+                    if (!kidDoc.exists()) throw new Error("Kid not found");
+                    const newPoints = (kidDoc.data().points || 0) + rewardToProcess.pointsSpent;
+
+                    batch.update(redeemedRewardRef, { 
+                        status: 'cancelled_by_parent', 
+                        dateCancelled: Timestamp.now(),
+                        cancellationNote: cancellationNote.trim() || null,
+                        cancelledBy: firebaseUser ? (firebaseUser.displayName || firebaseUser.email || firebaseUser.uid) : 'System',
+                    });
+                    batch.update(kidRef, { points: newPoints });
+                    await batch.commit();
+                    closeModals();
+                } catch (error) { console.error("Error cancelling reward request:", error); /* TODO: Show error */ }
+            },
+            "Yes, Cancel & Return Points",
+             <div>
+                <TextAreaField label="Reason for cancellation (optional):" value={cancellationNote} onChange={e => setCancellationNote(e.target.value)} placeholder="e.g., Item out of stock" />
+            </div>
+        );
+    };
+
+
+    if (pendingRewards.length === 0) { return <Card><h3 className="text-2xl font-semibold text-gray-700 mb-6">Fulfill Rewards</h3><p className="text-gray-500">No rewards pending fulfillment.</p></Card>; }
     return (
         <Card>
-            <h3 className="text-2xl font-semibold text-gray-700 mb-6">Approve Tasks</h3>
-            {pendingTasks.length === 0 ? <p className="text-gray-500">No tasks pending approval.</p> : (
-                <ul className="space-y-4">
-                    {pendingTasks.map(ct => {
-                        const kid = kids.find(k => k.id === ct.kidId);
-                        // const task = tasks.find(t => t.id === ct.taskId); // ct.taskName should be used
-                        if (!kid) return <li key={ct.id} className="text-red-500">Kid data missing for a pending task.</li>;
-                        
-                        return (
-                            <li key={ct.id} className="p-4 bg-gray-50 rounded-lg shadow-sm flex flex-col sm:flex-row justify-between items-start sm:items-center">
-                                <div className="mb-2 sm:mb-0">
-                                    <p className="font-semibold text-lg text-gray-800">{kid.name} completed: <span className="text-blue-600">{ct.taskName}</span></p>
-                                    <p className="text-sm text-gray-500">Submitted: {ct.dateSubmitted?.toDate().toLocaleDateString()}</p>
-                                    <p className="text-sm text-purple-600 font-semibold">Points: {ct.taskPoints}</p>
+            <h3 className="text-2xl font-semibold text-gray-700 mb-6">Fulfill Rewards</h3>
+            <ul className="space-y-4">
+                {pendingRewards.map(rr => {
+                    const kid = kids.find(k => k.id === rr.kidId);
+                    const rewardInfo = allRewards.find(r => r.id === rr.rewardId);
+                    return (
+                        <li key={rr.id} className="p-4 bg-gray-50 rounded-lg shadow-sm">
+                            <div className="flex flex-col sm:flex-row justify-between items-start">
+                                <div>
+                                    <p className="font-semibold text-lg text-gray-800">{kid?.name || 'Unknown Kid'} redeemed: <span className="text-yellow-600">{rr.rewardName}</span></p>
+                                    <p className="text-sm text-gray-500">Requested: {rr.dateRedeemed?.toDate().toLocaleDateString()}</p>
+                                    <p className="text-sm text-gray-500">Cost: {rr.pointsSpent} points</p>
+                                    {rewardInfo && <p className="text-xs text-gray-400 italic">Original reward ID: {rewardInfo.id}</p>}
                                 </div>
-                                <Button onClick={() => handleApproveTask(ct)} className="bg-green-500 hover:bg-green-600" icon={CheckCircle}>
-                                    Approve
-                                </Button>
-                            </li>
-                        );
-                    })}
-                </ul>
-            )}
+                                <div className="flex space-x-2 mt-2 sm:mt-0">
+                                    <Button onClick={() => openCancelModal(rr)} className="bg-red-500 hover:bg-red-600 text-sm" icon={PackageX}>Cancel</Button>
+                                    <Button onClick={() => openFulfillModal(rr)} className="bg-green-500 hover:bg-green-600 text-sm" icon={PackageCheck}>Fulfill</Button>
+                                </div>
+                            </div>
+                        </li>
+                    );
+                })}
+            </ul>
         </Card>
     );
 };
 
-// --- Parent Reward History (Enhanced with filtering) ---
-const ParentRewardHistory = ({ redeemedRewards, completedTasks, kids, rewards, tasks }) => {
-    const [filterPeriod, setFilterPeriod] = useState('all'); // 'all', 'today', 'week', 'month'
 
-    const now = new Date();
-    const filterData = (data, dateField) => {
-        if (filterPeriod === 'all') return data;
-        return data.filter(item => {
-            const itemDate = item[dateField]?.toDate();
-            if (!itemDate) return false;
-            if (filterPeriod === 'today') return getStartOfDay(itemDate).getTime() === getStartOfDay(now).getTime();
-            if (filterPeriod === 'week') return itemDate >= getStartOfWeek(now) && itemDate <= getEndOfWeek(now);
-            if (filterPeriod === 'month') return itemDate >= getStartOfMonth(now) && itemDate <= getEndOfMonth(now);
-            return true;
-        });
-    };
-
-    const filteredRedeemed = filterData(redeemedRewards, 'dateRedeemed');
-    const filteredCompleted = filterData(completedTasks.filter(ct => ct.status === 'approved'), 'dateApproved');
-
-
+// --- Parent Reward History ---
+const ParentRewardHistory = ({ redeemedRewards, completedTasks, kids, rewards: allRewardsData, tasks: allTasksData }) => {
+    const [filterPeriod, setFilterPeriod] = useState('all'); const now = new Date();
+    const filterData = (data, dateField) => { if (filterPeriod === 'all') return data; return data.filter(item => { const itemDate = item[dateField]?.toDate(); if (!itemDate) return false; if (filterPeriod === 'today') return getStartOfDay(itemDate).getTime() === getStartOfDay(now).getTime(); if (filterPeriod === 'week') return itemDate >= getStartOfWeek(now) && itemDate <= getEndOfWeek(now); if (filterPeriod === 'month') return itemDate >= getStartOfMonth(now) && itemDate <= getEndOfMonth(now); return true;});};
+    const filteredRedeemed = filterData(redeemedRewards, 'dateRedeemed').sort((a,b) => b.dateRedeemed.toMillis() - a.dateRedeemed.toMillis());
+    const filteredCompleted = filterData(completedTasks.filter(ct => ct.status === 'approved' || ct.status === 'rejected'), 'dateApprovedOrRejected').sort((a,b) => b.dateApprovedOrRejected.toMillis() - a.dateApprovedOrRejected.toMillis());
     return (
         <Card>
-            <div className="flex justify-between items-center mb-6">
-                <h3 className="text-2xl font-semibold text-gray-700">History</h3>
-                <SelectField 
-                    value={filterPeriod} 
-                    onChange={e => setFilterPeriod(e.target.value)}
-                    options={[
-                        {value: 'all', label: 'All Time'},
-                        {value: 'today', label: 'Today'},
-                        {value: 'week', label: 'This Week'},
-                        {value: 'month', label: 'This Month'},
-                    ]}
-                />
-            </div>
-            
+            <div className="flex justify-between items-center mb-6"><h3 className="text-2xl font-semibold text-gray-700">History</h3><SelectField value={filterPeriod} onChange={e => setFilterPeriod(e.target.value)} options={[{value: 'all', label: 'All Time'}, {value: 'today', label: 'Today'}, {value: 'week', label: 'This Week'}, {value: 'month', label: 'This Month'}]}/></div>
             <div className="mb-8">
                 <h4 className="text-xl font-semibold text-gray-600 mb-3">Redeemed Rewards</h4>
-                {filteredRedeemed.length === 0 ? <p className="text-gray-500">No rewards redeemed in this period.</p> : (
-                    <div className="overflow-x-auto"><table className="min-w-full divide-y divide-gray-200">
-                        <thead className="bg-gray-50"><tr>
-                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Date</th>
-                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Kid</th>
-                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Reward</th>
-                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Points</th>
-                        </tr></thead>
-                        <tbody className="bg-white divide-y divide-gray-200">
-                            {filteredRedeemed.sort((a, b) => b.dateRedeemed.toMillis() - a.dateRedeemed.toMillis()).map(rr => {
-                                const kid = kids.find(k => k.id === rr.kidId);
-                                const reward = rewards.find(r => r.id === rr.rewardId);
-                                return (<tr key={rr.id}>
-                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{rr.dateRedeemed?.toDate().toLocaleDateString()}</td>
-                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{kid?.name || 'N/A'}</td>
-                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{reward?.name || rr.rewardName || 'N/A'}</td>
-                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{rr.pointsSpent}</td>
-                                </tr>);
-                            })}
-                        </tbody>
-                    </table></div>
-                )}
+                {filteredRedeemed.length === 0 ? <p className="text-gray-500">No rewards activity for this period.</p> : (
+                    <div className="overflow-x-auto"><table className="min-w-full divide-y divide-gray-200"><thead className="bg-gray-50"><tr><th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Date</th><th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Kid</th><th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Reward</th><th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Points</th><th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Status</th><th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Processed By</th></tr></thead><tbody className="bg-white divide-y divide-gray-200">
+                    {filteredRedeemed.map(rr => { const k=kids.find(k=>k.id===rr.kidId); return (<tr key={rr.id} className={rr.status === 'cancelled_by_parent' ? 'bg-red-50' : (rr.status === 'fulfilled' ? 'bg-green-50' : 'bg-yellow-50')}><td className="px-4 py-2 whitespace-nowrap text-sm">{rr.dateRedeemed?.toDate().toLocaleDateString()}</td><td className="px-4 py-2 whitespace-nowrap text-sm">{k?.name||'N/A'}</td><td className="px-4 py-2 whitespace-nowrap text-sm">{rr.rewardName||'N/A'}</td><td className="px-4 py-2 whitespace-nowrap text-sm">{rr.pointsSpent}</td><td className="px-4 py-2 whitespace-nowrap text-sm font-medium">{rr.status?.replace(/_/g, ' ') || 'Pending'}</td><td className="px-4 py-2 whitespace-nowrap text-xs text-gray-500">{rr.fulfilledBy || rr.cancelledBy || '-'}</td></tr>);})}</tbody></table></div>)}
             </div>
-
             <div>
-                <h4 className="text-xl font-semibold text-gray-600 mb-3">Approved Tasks</h4>
-                {filteredCompleted.length === 0 ? <p className="text-gray-500">No tasks approved in this period.</p> : (
-                     <div className="overflow-x-auto"><table className="min-w-full divide-y divide-gray-200">
-                        <thead className="bg-gray-50"><tr>
-                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Date Approved</th>
-                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Kid</th>
-                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Task</th>
-                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Points</th>
-                        </tr></thead>
-                        <tbody className="bg-white divide-y divide-gray-200">
-                            {filteredCompleted.sort((a, b) => b.dateApproved.toMillis() - a.dateApproved.toMillis()).map(ct => {
-                                const kid = kids.find(k => k.id === ct.kidId);
-                                // const task = tasks.find(t => t.id === ct.taskId); // Use ct.taskName
-                                return (<tr key={ct.id}>
-                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{ct.dateApproved?.toDate().toLocaleDateString()}</td>
-                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{kid?.name || ct.kidName || 'N/A'}</td>
-                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{ct.taskName}</td>
-                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{ct.taskPoints}</td>
-                                </tr>);
-                            })}
-                        </tbody>
-                    </table></div>
-                )}
+                <h4 className="text-xl font-semibold text-gray-600 mb-3">Task Submissions</h4>
+                {filteredCompleted.length === 0 ? <p className="text-gray-500">No tasks submitted/reviewed for this period.</p> : (
+                    <div className="overflow-x-auto"><table className="min-w-full divide-y divide-gray-200"><thead className="bg-gray-50"><tr><th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Date Reviewed</th><th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Kid</th><th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Task</th><th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Status</th><th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Points</th><th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Processed By</th><th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Note</th></tr></thead><tbody className="bg-white divide-y divide-gray-200">
+                    {filteredCompleted.map(ct => { const k=kids.find(k=>k.id===ct.kidId); return (<tr key={ct.id} className={ct.status === 'rejected' ? 'bg-red-50' : (ct.status === 'approved' ? 'bg-green-50' : '')}><td className="px-4 py-2 whitespace-nowrap text-sm">{ct.dateApprovedOrRejected?.toDate().toLocaleDateString()}</td><td className="px-4 py-2 whitespace-nowrap text-sm">{k?.name||ct.kidName||'N/A'}</td><td className="px-4 py-2 whitespace-nowrap text-sm">{ct.taskName}</td><td className="px-4 py-2 whitespace-nowrap text-sm font-medium"><span className={`${ct.status === 'approved' ? 'text-green-600' : (ct.status === 'rejected' ? 'text-red-600' : 'text-yellow-600')}`}>{ct.status?.replace('_', ' ')}</span></td><td className="px-4 py-2 whitespace-nowrap text-sm">{ct.pointsAwarded || 0}</td><td className="px-4 py-2 whitespace-nowrap text-xs text-gray-500">{ct.processedBy || '-'}</td><td className="px-4 py-2 whitespace-nowrap text-sm text-gray-500 max-w-xs truncate" title={ct.approvalNote}>{ct.approvalNote || '-'}</td></tr>);})}</tbody></table></div>)}
             </div>
         </Card>
     );
 };
-
 
 // --- Kid Dashboard ---
-const KidDashboard = ({ kid, tasks, rewards, completedTasks, redeemedRewards }) => {
-    const [activeTab, setActiveTab] = useState('profile'); 
-    
-    const NavItem = ({ tabName, icon: Icon, label }) => (
-        <button onClick={() => setActiveTab(tabName)} className={`flex items-center px-4 py-3 rounded-lg transition-colors duration-150 ${activeTab === tabName ? 'bg-green-600 text-white shadow-md' : 'text-gray-600 hover:bg-green-100'}`}>
-            <Icon size={20} className="mr-2" /> {label}
-        </button>
-    );
-
-    const renderContent = () => {
-        switch (activeTab) {
-            case 'profile': return <KidProfile kid={kid} />;
-            case 'tasks': return <KidTasksList kid={kid} allTasks={tasks} completedTasks={completedTasks} />;
-            case 'rewards': return <KidRewardsList kid={kid} rewards={rewards} />;
-            case 'history': return <KidHistory kid={kid} completedTasks={completedTasks} redeemedRewards={redeemedRewards} tasks={tasks} rewards={rewards} />;
-            default: return <KidProfile kid={kid} />;
-        }
-    };
-
+const KidDashboard = ({ kidData, allTasks, rewards, completedTasks, redeemedRewardsData, showConfirmation }) => { /* Pass redeemedRewardsData */
+    const [activeTab, setActiveTab] = useState('profile'); const kid = kidData;
+    const pointsToday = useMemo(() => { /* Unchanged */ const todayStart = getStartOfDay(new Date()); return completedTasks.filter(ct => ct.kidId === kid.id && ct.status === 'approved' && ct.dateApprovedOrRejected?.toDate() >= todayStart).reduce((sum, ct) => sum + (ct.pointsAwarded || 0), 0);}, [completedTasks, kid.id]);
+    const pointsThisWeek = useMemo(() => { /* Unchanged */ const weekStart = getStartOfWeek(new Date()); return completedTasks.filter(ct => ct.kidId === kid.id && ct.status === 'approved' && ct.dateApprovedOrRejected?.toDate() >= weekStart).reduce((sum, ct) => sum + (ct.pointsAwarded || 0), 0);}, [completedTasks, kid.id]);
+    const pointsThisMonth = useMemo(() => { /* Unchanged */ const monthStart = getStartOfMonth(new Date()); return completedTasks.filter(ct => ct.kidId === kid.id && ct.status === 'approved' && ct.dateApprovedOrRejected?.toDate() >= monthStart).reduce((sum, ct) => sum + (ct.pointsAwarded || 0), 0);}, [completedTasks, kid.id]);
+    const NavItem = ({ tabName, icon: Icon, label }) => ( /* Unchanged */ <button onClick={() => setActiveTab(tabName)} className={`flex items-center px-3 py-2 sm:px-4 sm:py-3 rounded-lg transition-colors duration-150 text-sm sm:text-base ${activeTab === tabName ? 'bg-green-600 text-white shadow-md' : 'text-gray-600 hover:bg-green-100'}`}><Icon size={20} className="mr-2" /> {label}</button>);
+    const renderContent = () => { switch (activeTab) { case 'profile': return <KidProfile kid={kid} pointsToday={pointsToday} pointsThisWeek={pointsThisWeek} pointsThisMonth={pointsThisMonth} />; case 'tasks': return <KidTasksList kid={kid} allTasks={allTasks} completedTasks={completedTasks} showConfirmation={showConfirmation} />; case 'rewards': return <KidRewardsList kid={kid} rewards={rewards} showConfirmation={showConfirmation} />; case 'history': return <KidHistory kid={kid} completedTasks={completedTasks} redeemedRewards={redeemedRewardsData} />; default: return <KidProfile kid={kid} pointsToday={pointsToday} pointsThisWeek={pointsThisWeek} pointsThisMonth={pointsThisMonth}/>; }};
     if (!kid) return <p>Loading kid data...</p>;
-
-    return (
-        <div className="space-y-6">
-             <Card className="bg-gradient-to-r from-green-400 to-blue-500 text-white">
-                <h2 className="text-3xl font-semibold mb-1">Hi, {kid.name}!</h2>
-                <p className="text-lg">Ready to earn some points and get awesome rewards?</p>
-                <div className="mt-4 text-2xl font-bold">Your Points: <span className="bg-white text-green-600 px-3 py-1 rounded-full shadow">{kid.points}</span></div>
-            </Card>
-             <nav className="bg-white shadow rounded-lg p-2"><div className="flex flex-wrap gap-2">
-                <NavItem tabName="profile" icon={User} label="My Profile" />
-                <NavItem tabName="tasks" icon={ClipboardList} label="My Tasks" />
-                <NavItem tabName="rewards" icon={Gift} label="Redeem Rewards" />
-                <NavItem tabName="history" icon={ListChecks} label="My History" />
-            </div></nav>
-            <div>{renderContent()}</div>
-        </div>
-    );
+    return ( <div className="space-y-6"><Card className="bg-gradient-to-r from-green-400 to-blue-500 text-white"><h2 className="text-3xl font-semibold mb-1">Hi, {kid.name}!</h2><p className="text-lg">Ready to earn points?</p><div className="mt-4 text-2xl font-bold">Your Total Points: <span className="bg-white text-green-600 px-3 py-1 rounded-full shadow">{kid.points || 0}</span></div></Card><nav className="bg-white shadow rounded-lg p-2"><div className="flex flex-wrap gap-2"><NavItem tabName="profile" icon={User} label="My Profile" /><NavItem tabName="tasks" icon={ClipboardList} label="My Tasks" /><NavItem tabName="rewards" icon={Gift} label="Redeem Rewards" /><NavItem tabName="history" icon={ListChecks} label="My History" /></div></nav><div>{renderContent()}</div></div>);
 };
 
-// --- Kid Profile (Unchanged) ---
-const KidProfile = ({ kid }) => (
-    <Card>
-        <h3 className="text-2xl font-semibold text-gray-700 mb-4">My Profile</h3>
-        <p className="text-lg"><strong>Name:</strong> {kid.name}</p>
-        <p className="text-lg"><strong>Current Points:</strong> <span className="font-bold text-purple-600">{kid.points}</span></p>
-    </Card>
-);
+// --- Kid Profile (Unchanged from v3) ---
+const KidProfile = ({ kid, pointsToday, pointsThisWeek, pointsThisMonth }) => ( <Card><h3 className="text-2xl font-semibold text-gray-700 mb-4">My Profile</h3><p className="text-lg mb-1"><strong>Name:</strong> {kid.name}</p>{kid.email && <p className="text-lg mb-1 flex items-center"><strong>Email:</strong> <Mail size={16} className="mx-1 text-gray-600"/> {kid.email}</p>}<div className="text-lg mb-4 flex items-center"><strong>Current Total Points:</strong>{(kid.points || 0) <= 5 && (kid.points || 0) > 0 ? (<span className="flex items-center ml-2">{Array.from({ length: kid.points || 0 }).map((_, i) => (<Coins key={i} size={24} className="text-yellow-500 mr-1" />))}<span className="font-bold text-purple-600 ml-1">({kid.points || 0})</span></span>) : (<span className="font-bold text-purple-600 ml-2">{kid.points || 0}</span>)}</div><h4 className="text-xl font-semibold text-gray-700 mt-6 mb-3">Points Earned:</h4><div className="grid grid-cols-1 sm:grid-cols-3 gap-4"> <div className="p-4 bg-blue-50 rounded-lg text-center"><p className="text-sm text-blue-700 font-medium">Today</p><p className="text-2xl font-bold text-blue-600">{pointsToday}</p></div><div className="p-4 bg-green-50 rounded-lg text-center"><p className="text-sm text-green-700 font-medium">This Week</p><p className="text-2xl font-bold text-green-600">{pointsThisWeek}</p></div><div className="p-4 bg-indigo-50 rounded-lg text-center"><p className="text-sm text-indigo-700 font-medium">This Month</p><p className="text-2xl font-bold text-indigo-600">{pointsThisMonth}</p></div></div></Card>);
 
-// --- Kid Tasks List (Enhanced for daily/weekly view and assignments) ---
-const KidTasksList = ({ kid, allTasks, completedTasks }) => {
-    const [showFeedback, setShowFeedback] = useState('');
-    const [feedbackType, setFeedbackType] = useState('info');
-    const [taskViewPeriod, setTaskViewPeriod] = useState('today'); // 'today', 'week'
-
-    const now = new Date();
-    const todayStart = getStartOfDay(now);
-    const todayEnd = getEndOfDay(now);
-    const weekStart = getStartOfWeek(now);
-    const weekEnd = getEndOfWeek(now);
-
-    const isTaskDueInPeriod = (task) => {
-        if (!task.isActive) return false;
-        // Check assignment
-        if (task.assignedKidId && task.assignedKidId !== kid.id) return false;
-
-        const nextDueDate = task.nextDueDate?.toDate();
-        if (task.recurrenceType === 'none') { // One-time tasks
-            // Show if not completed yet, regardless of period (for simplicity, or add more complex logic)
-            const alreadyCompleted = completedTasks.find(ct => ct.taskId === task.id && ct.kidId === kid.id && ct.status === 'approved');
-            return !alreadyCompleted;
-        }
-        if (!nextDueDate) return false; // Recurring tasks must have a next due date
-
-        if (taskViewPeriod === 'today') return nextDueDate >= todayStart && nextDueDate <= todayEnd;
-        if (taskViewPeriod === 'week') return nextDueDate >= weekStart && nextDueDate <= weekEnd;
-        return false;
-    };
-    
-    const tasksToShow = allTasks.filter(isTaskDueInPeriod);
-
-    const handleCompleteTask = async (task) => {
-        const todayStr = new Date().toLocaleDateString();
-        const alreadySubmittedTodayForThisInstance = completedTasks.find(ct => 
-            ct.taskId === task.id && 
-            ct.kidId === kid.id &&
-            ct.status === 'pending' && // Only check pending for re-submission prevention
-            ct.taskDueDate?.toDate().toLocaleDateString() === task.nextDueDate?.toDate().toLocaleDateString()
-        );
-
-        if (alreadySubmittedTodayForThisInstance) {
-            setShowFeedback(`You've already submitted "${task.name}" for this due date. It's pending approval.`);
-            setFeedbackType('info');
-            setTimeout(() => setShowFeedback(''), 4000);
-            return;
-        }
-
-        try {
-            await addDoc(collection(db, completedTasksCollectionPath), {
-                kidId: kid.id,
-                kidName: kid.name,
-                taskId: task.id,
-                taskName: task.name,
-                taskPoints: task.points,
-                taskDueDate: task.nextDueDate || Timestamp.fromDate(todayStart), // Due date of this specific instance
-                dateSubmitted: Timestamp.now(),
-                status: 'pending'
-            });
-            setShowFeedback(`Task "${task.name}" submitted for approval!`);
-            setFeedbackType('success');
-            setTimeout(() => setShowFeedback(''), 3000);
-            // Note: The parent's approval will trigger updating the main task's nextDueDate
-        } catch (error) {
-            console.error("Error completing task: ", error);
-            setShowFeedback('Error submitting task. Please try again.');
-            setFeedbackType('error');
-            setTimeout(() => setShowFeedback(''), 3000);
-        }
-    };
-    
+// --- Kid Tasks List ---
+const KidTasksList = ({ kid, allTasks, completedTasks, showConfirmation }) => {
+    const [showFeedback, setShowFeedback] = useState(''); const [feedbackType, setFeedbackType] = useState('info'); const [taskViewPeriod, setTaskViewPeriod] = useState('today');
+    const now = new Date(); const todayStart = getStartOfDay(now); const todayEnd = getEndOfDay(now); const weekStart = getStartOfWeek(now); const weekEnd = getEndOfWeek(now);
+    const tasksToShow = useMemo(() => { /* Unchanged from v3 */ return allTasks.filter(task => { if (!task.isActive) return false; if (task.assignedKidId && task.assignedKidId !== kid.id && task.assignedKidId !== null && task.assignedKidId !== '') return false;  const taskStartDate = task.startDate ? getStartOfDay(new Date(task.startDate)) : todayStart; if (now < taskStartDate) return false;  if (task.recurrenceType === 'none') { const customDueDate = task.customDueDate ? getEndOfDay(new Date(task.customDueDate)) : null; if (!customDueDate) return false; const completedOrPending = completedTasks.find(ct => ct.taskId === task.id && ct.kidId === kid.id && (ct.status === 'approved' || ct.status === 'pending_approval') && ct.taskDueDate?.toDate().getTime() === getStartOfDay(new Date(task.customDueDate)).getTime()); return !completedOrPending && customDueDate >= todayStart && customDueDate <= (taskViewPeriod === 'today' ? todayEnd : weekEnd); } const nextDueDate = task.nextDueDate?.toDate ? getStartOfDay(task.nextDueDate.toDate()) : null; if (!nextDueDate) return false; const isDueInPeriod = (taskViewPeriod === 'today' && nextDueDate.getTime() === todayStart.getTime()) || (taskViewPeriod === 'week' && nextDueDate >= weekStart && nextDueDate <= weekEnd); if (!isDueInPeriod) return false; const submittedOrApprovedForThisDueDate = completedTasks.find(ct => ct.taskId === task.id && ct.kidId === kid.id && ct.taskDueDate?.toDate().getTime() === nextDueDate.getTime() && (ct.status === 'approved' || ct.status === 'pending_approval')); return !submittedOrApprovedForThisDueDate; }).sort((a,b) => (a.nextDueDate?.toMillis() || (a.customDueDate ? new Date(a.customDueDate).getTime() : 0)) - (b.nextDueDate?.toMillis() || (b.customDueDate ? new Date(b.customDueDate).getTime() : 0) )); }, [allTasks, kid.id, completedTasks, taskViewPeriod, todayStart, todayEnd, weekStart, weekEnd, now]); // Added `now` to deps
+    const handleCompleteTask = async (task) => { /* Unchanged from v3 */ const taskDueDateForCompletion = task.recurrenceType === 'none' ? (task.customDueDate ? Timestamp.fromDate(getStartOfDay(new Date(task.customDueDate))) : Timestamp.fromDate(todayStart)) : task.nextDueDate; if (!taskDueDateForCompletion) { setShowFeedback(`Cannot determine due date for "${task.name}".`); setFeedbackType('error'); setTimeout(() => setShowFeedback(''), 4000); return; } const alreadySubmitted = completedTasks.find(ct => ct.taskId === task.id && ct.kidId === kid.id && ct.status === 'pending_approval' && ct.taskDueDate?.toDate().getTime() === taskDueDateForCompletion.toDate().getTime() ); if (alreadySubmitted) { setShowFeedback(`Already submitted "${task.name}" for this due date.`); setFeedbackType('info'); setTimeout(() => setShowFeedback(''), 4000); return; } try { await addDoc(collection(db, completedTasksCollectionPath), { kidId: kid.id, kidName: kid.name, taskId: task.id, taskName: task.name, taskPoints: task.points, taskDueDate: taskDueDateForCompletion, dateSubmitted: Timestamp.now(), status: 'pending_approval' }); setShowFeedback(`Task "${task.name}" submitted for approval!`); setFeedbackType('success'); setTimeout(() => setShowFeedback(''), 3000); } catch (error) { console.error("Error completing task: ", error); setShowFeedback('Error submitting task.'); setFeedbackType('error'); setTimeout(() => setShowFeedback(''), 3000); } };
+    const [taskToWithdraw, setTaskToWithdraw] = useState(null); const confirmWithdrawTask = (completedTaskInstance) => { /* Unchanged from v3 */ setTaskToWithdraw(completedTaskInstance); showConfirmation( "Withdraw Task", `Are you sure you want to withdraw your submission for "${completedTaskInstance.taskName}"?`, () => handleWithdrawTask(completedTaskInstance.id) ); }; const handleWithdrawTask = async (completedTaskId) => { /* Unchanged from v3 */ if(!completedTaskId) return; try { await deleteDoc(doc(db, completedTasksCollectionPath, completedTaskId)); setShowFeedback("Task submission withdrawn."); setFeedbackType('info'); setTaskToWithdraw(null); } catch (error) { console.error("Error withdrawing task: ", error); setShowFeedback("Failed to withdraw task."); setFeedbackType('error'); } setTimeout(() => setShowFeedback(''), 3000); };
     const feedbackColor = { info: 'bg-blue-100 text-blue-700', success: 'bg-green-100 text-green-700', error: 'bg-red-100 text-red-700' };
-
-    return (
-        <Card>
-            <div className="flex justify-between items-center mb-6">
-                <h3 className="text-2xl font-semibold text-gray-700">My Tasks</h3>
-                 <SelectField 
-                    value={taskViewPeriod} 
-                    onChange={e => setTaskViewPeriod(e.target.value)}
-                    options={[
-                        {value: 'today', label: "Today's Tasks"},
-                        {value: 'week', label: "This Week's Tasks"},
-                    ]}
-                />
-            </div>
-            {showFeedback && <p className={`mb-4 p-3 rounded-md ${feedbackColor[feedbackType]}`}>{showFeedback}</p>}
-            
-            {tasksToShow.length === 0 ? <p className="text-gray-500">No tasks due for this period, or check if tasks are assigned to you.</p> : (
-                <ul className="space-y-4">
-                    {tasksToShow.map(task => {
-                        const isCompletedInstancePending = completedTasks.find(ct => 
-                            ct.taskId === task.id && 
-                            ct.kidId === kid.id &&
-                            ct.status === 'pending' &&
-                            ct.taskDueDate?.toDate().getTime() === task.nextDueDate?.toDate().getTime()
-                        );
-                         const isCompletedInstanceApproved = completedTasks.find(ct => 
-                            ct.taskId === task.id && 
-                            ct.kidId === kid.id &&
-                            ct.status === 'approved' &&
-                            ct.taskDueDate?.toDate().getTime() === task.nextDueDate?.toDate().getTime()
-                        );
-
-
-                        let buttonOrStatus;
-                        if (isCompletedInstanceApproved) {
-                            buttonOrStatus = <span className="px-3 py-1 text-xs font-semibold rounded-full bg-green-200 text-green-800">Completed & Approved</span>;
-                        } else if (isCompletedInstancePending) {
-                            buttonOrStatus = <span className="px-3 py-1 text-xs font-semibold rounded-full bg-yellow-200 text-yellow-800">Pending Approval</span>;
-                        } else {
-                            buttonOrStatus = <Button onClick={() => handleCompleteTask(task)} className="bg-blue-500 hover:bg-blue-600" icon={CheckCircle}>I Did This!</Button>;
-                        }
-
-                        return (
-                            <li key={task.id + (task.nextDueDate?.seconds || '')} className="p-4 bg-gray-50 rounded-lg shadow-sm flex flex-col sm:flex-row justify-between items-start sm:items-center">
-                                <div className="mb-2 sm:mb-0">
-                                    <span className="font-semibold text-lg text-gray-800">{task.name}</span>
-                                    <p className="text-sm text-purple-600 font-semibold">{task.points} points</p>
-                                    {task.nextDueDate && <p className="text-xs text-gray-500">Due: {task.nextDueDate.toDate().toLocaleDateString()}</p>}
+    return (<Card>
+        <div className="flex flex-col sm:flex-row justify-between sm:items-center mb-6"><h3 className="text-2xl font-semibold text-gray-700 mb-2 sm:mb-0">My Tasks</h3><SelectField value={taskViewPeriod} onChange={e => setTaskViewPeriod(e.target.value)} options={[{value: 'today', label: "Today's Tasks"}, {value: 'week', label: "This Week's Tasks"}]}/></div>
+        {showFeedback && <p className={`mb-4 p-3 rounded-md ${feedbackColor[feedbackType]}`}>{showFeedback}</p>}
+        {tasksToShow.length === 0 ? <p className="text-gray-500">No tasks due for this period, or all due tasks are submitted/completed.</p> : (
+            <ul className="space-y-4">
+                {tasksToShow.map(task => {
+                    const displayDueDate = task.recurrenceType === 'none' ? (task.customDueDate ? new Date(task.customDueDate+'T00:00:00') : null) : task.nextDueDate?.toDate();
+                    const pendingSubmission = completedTasks.find(ct => ct.taskId === task.id && ct.kidId === kid.id && ct.status === 'pending_approval' && ct.taskDueDate?.toDate().getTime() === (displayDueDate?.getTime()));
+                    return (
+                        <li key={task.id + (displayDueDate?.getTime() || '')} className="p-4 bg-gray-50 rounded-lg shadow-sm flex flex-col sm:flex-row justify-between items-start sm:items-center">
+                            <div className="mb-2 sm:mb-0">
+                                <span className="font-semibold text-lg text-gray-800">{task.name}</span>
+                                <div className="flex items-center text-sm text-purple-600 font-semibold">
+                                    {task.points >= 1 && task.points <= 5 ? <StarIconDisplay count={task.points} /> : <span>{task.points}</span>}
+                                    <span className="ml-1">points</span>
                                 </div>
-                                {buttonOrStatus}
-                            </li>
-                        );
-                    })}
-                </ul>
-            )}
-        </Card>
-    );
-};
+                                {displayDueDate && <p className="text-xs text-gray-500">Due: {displayDueDate.toLocaleDateString()}</p>}
+                            </div>
+                            {pendingSubmission ? (<Button onClick={() => confirmWithdrawTask(pendingSubmission)} className="bg-yellow-500 hover:bg-yellow-600" icon={RefreshCcw}>Withdraw</Button>) : (<Button onClick={() => handleCompleteTask(task)} className="bg-blue-500 hover:bg-blue-600" icon={CheckCircle}>I Did This!</Button>)}
+                        </li>);})}</ul>)}</Card>);};
 
-// --- Kid Rewards List (Unchanged, ensure delete confirmation if editing is added) ---
-const KidRewardsList = ({ kid, rewards }) => {
-    const [showFeedback, setShowFeedback] = useState('');
-    const [feedbackType, setFeedbackType] = useState('info');
+// --- Kid Rewards List ---
+const KidRewardsList = ({ kid, rewards, showConfirmation }) => { 
+    const [showFeedback, setShowFeedback] = useState(''); const [feedbackType, setFeedbackType] = useState('info');
+    const [rewardToRedeem, setRewardToRedeem] = useState(null);
 
-    const handleRedeemReward = async (reward) => {
-        if (kid.points < reward.pointCost) {
-            setShowFeedback("Not enough points to redeem this reward.");
-            setFeedbackType('error'); setTimeout(() => setShowFeedback(''), 3000); return;
-        }
+    const confirmRedeemReward = (reward) => {
+        if ((kid.points || 0) < reward.pointCost) { setShowFeedback("Not enough points."); setFeedbackType('error'); setTimeout(() => setShowFeedback(''), 3000); return; }
+        setRewardToRedeem(reward);
+        showConfirmation( "Confirm Redemption", `Redeem "${reward.name}" for ${reward.pointCost} points?`, handleRedeemReward, "Redeem" );
+    };
+
+    const handleRedeemReward = async () => {
+        if(!rewardToRedeem) return;
+        if ((kid.points || 0) < rewardToRedeem.pointCost) { setShowFeedback("Not enough points (check again)."); setFeedbackType('error'); setTimeout(() => setShowFeedback(''), 3000); setRewardToRedeem(null); return; }
         try {
-            const kidRef = doc(db, kidsCollectionPath, kid.id);
-            const batch = writeBatch(db);
-            batch.update(kidRef, { points: kid.points - reward.pointCost });
-            const newRedeemedRewardRef = doc(collection(db, redeemedRewardsCollectionPath));
+            const kidRef = doc(db, kidsCollectionPath, kid.id); const batch = writeBatch(db); 
+            batch.update(kidRef, { points: (kid.points || 0) - rewardToRedeem.pointCost });
+            const newRedeemedRewardRef = doc(collection(db, redeemedRewardsCollectionPath)); 
             batch.set(newRedeemedRewardRef, { 
-                kidId: kid.id, kidName: kid.name, rewardId: reward.id,
-                rewardName: reward.name, pointsSpent: reward.pointCost, dateRedeemed: Timestamp.now()
+                kidId: kid.id, kidName: kid.name, rewardId: rewardToRedeem.id, rewardName: rewardToRedeem.name, 
+                pointsSpent: rewardToRedeem.pointCost, dateRedeemed: Timestamp.now(), 
+                status: 'pending_fulfillment' // New status
             });
-            await batch.commit();
-            setShowFeedback(`Reward "${reward.name}" redeemed successfully!`);
-            setFeedbackType('success'); setTimeout(() => setShowFeedback(''), 3000);
-        } catch (error) {
-            console.error("Error redeeming reward: ", error);
-            setShowFeedback('Error redeeming reward. Please try again.');
-            setFeedbackType('error'); setTimeout(() => setShowFeedback(''), 3000);
-        }
+            await batch.commit(); setShowFeedback(`"${rewardToRedeem.name}" redeemed! Awaiting parent fulfillment.`); setFeedbackType('success');
+        } catch (error) { console.error("Error redeeming: ", error); setShowFeedback('Error redeeming reward.'); setFeedbackType('error'); }
+        finally { setRewardToRedeem(null); setTimeout(() => setShowFeedback(''), 4000); } // Increased timeout for feedback
     };
-    
-    const availableRewards = rewards.filter(reward => reward.isAvailable);
-    const feedbackColor = { info: 'bg-blue-100 text-blue-700', success: 'bg-green-100 text-green-700', error: 'bg-red-100 text-red-700' };
 
-    return (
-        <Card>
-            <h3 className="text-2xl font-semibold text-gray-700 mb-6">Redeem Rewards</h3>
-            {showFeedback && <p className={`mb-4 p-3 rounded-md ${feedbackColor[feedbackType]}`}>{showFeedback}</p>}
-            {availableRewards.length === 0 ? <p className="text-gray-500">No rewards available to redeem right now.</p> : (
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                    {availableRewards.map(reward => (
-                        <Card key={reward.id} className="flex flex-col justify-between items-center text-center border border-yellow-300">
-                            <Gift size={48} className="text-yellow-500 mb-3" />
-                            <h4 className="font-semibold text-xl text-gray-800 mb-1">{reward.name}</h4>
-                            <p className="text-lg text-yellow-700 font-bold mb-3">{reward.pointCost} points</p>
-                            <Button onClick={() => handleRedeemReward(reward)} disabled={kid.points < reward.pointCost}
-                                className={`w-full ${kid.points < reward.pointCost ? 'bg-gray-400' : 'bg-yellow-500 hover:bg-yellow-600'}`} icon={DollarSign}>
-                                {kid.points < reward.pointCost ? 'Not Enough Points' : 'Redeem'}
-                            </Button>
-                        </Card>
-                    ))}
-                </div>
-            )}
-        </Card>
-    );
+    const available = rewards.filter(r => r.isAvailable); const fbColor = { info: 'bg-blue-100 text-blue-700', success: 'bg-green-100 text-green-700', error: 'bg-red-100 text-red-700' };
+    return ( <Card><h3 className="text-2xl font-semibold text-gray-700 mb-6">Redeem Rewards</h3> {showFeedback && <p className={`mb-4 p-3 rounded-md ${fbColor[feedbackType]}`}>{showFeedback}</p>}{available.length === 0 ? <p className="text-gray-500">No rewards available.</p> : (<div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">{available.map(r => (<Card key={r.id} className="flex flex-col justify-between items-center text-center border border-yellow-300"><Gift size={48} className="text-yellow-500 mb-3" /><h4 className="font-semibold text-xl text-gray-800 mb-1">{r.name}</h4><p className="text-lg text-yellow-700 font-bold mb-3">{r.pointCost} points</p><Button onClick={() => confirmRedeemReward(r)} disabled={(kid.points||0)<r.pointCost} className={`w-full ${(kid.points||0)<r.pointCost ? 'bg-gray-400':'bg-yellow-500 hover:bg-yellow-600'}`} icon={DollarSign}>{(kid.points||0)<r.pointCost?'Not Enough Points':'Redeem'}</Button></Card>))}</div>)}</Card>);
 };
 
-// --- Kid History (Enhanced with filtering) ---
-const KidHistory = ({ kid, completedTasks, redeemedRewards, tasks, rewards }) => {
-    const [filterPeriod, setFilterPeriod] = useState('all'); // 'all', 'today', 'week', 'month'
-    const now = new Date();
-
-    const filterData = (data, dateField) => {
-        if (filterPeriod === 'all') return data;
-        return data.filter(item => {
-            const itemDate = item[dateField]?.toDate();
-            if (!itemDate) return false;
-            if (filterPeriod === 'today') return getStartOfDay(itemDate).getTime() === getStartOfDay(now).getTime();
-            if (filterPeriod === 'week') return itemDate >= getStartOfWeek(now) && itemDate <= getEndOfWeek(now);
-            if (filterPeriod === 'month') return itemDate >= getStartOfMonth(now) && itemDate <= getEndOfMonth(now);
-            return true;
-        });
-    };
+// --- Kid History ---
+const KidHistory = ({ kid, completedTasks, redeemedRewards }) => { 
+    const [filterPeriod, setFilterPeriod] = useState('all'); const now = new Date(); 
+    const filterData = (data, dateField) => { /* Unchanged */ if (filterPeriod === 'all') return data; return data.filter(item => { const iDate = item[dateField]?.toDate(); if (!iDate) return false; if (filterPeriod === 'today') return getStartOfDay(iDate).getTime()===getStartOfDay(now).getTime(); if (filterPeriod === 'week') return iDate>=getStartOfWeek(now) && iDate<=getEndOfWeek(now); if (filterPeriod === 'month') return iDate>=getStartOfMonth(now) && iDate<=getEndOfMonth(now); return true; }); };
+    const kidCT = completedTasks.filter(ct => ct.kidId === kid.id); const kidRR = redeemedRewards.filter(rr => rr.kidId === kid.id);
+    const fCompleted = filterData(kidCT, 'dateSubmitted').sort((a,b)=>b.dateSubmitted.toMillis()-a.dateSubmitted.toMillis()); 
+    const fRedeemed = filterData(kidRR, 'dateRedeemed').sort((a,b)=>b.dateRedeemed.toMillis()-a.dateRedeemed.toMillis());
     
-    // Filter for the specific kid
-    const kidCompletedTasks = completedTasks.filter(ct => ct.kidId === kid.id);
-    const kidRedeemedRewards = redeemedRewards.filter(rr => rr.kidId === kid.id);
+    const getStatusClass = (status) => {
+        if (status === 'approved') return 'text-green-600';
+        if (status === 'rejected') return 'text-red-600';
+        if (status === 'pending_approval') return 'text-yellow-600';
+        if (status === 'pending_fulfillment') return 'text-blue-600';
+        if (status === 'fulfilled') return 'text-purple-600';
+        if (status === 'cancelled_by_parent') return 'text-pink-600 line-through';
+        return 'text-gray-600';
+    };
 
-    const filteredCompleted = filterData(kidCompletedTasks, 'dateSubmitted'); // or dateApproved if preferred for "done"
-    const filteredRedeemed = filterData(kidRedeemedRewards, 'dateRedeemed');
-
-    return (
-        <div className="space-y-8">
-            <div className="flex justify-end mb-0 -mt-4"> {/* Position filter for kid history */}
-                 <SelectField 
-                    value={filterPeriod} 
-                    onChange={e => setFilterPeriod(e.target.value)}
-                    options={[
-                        {value: 'all', label: 'All Time'},
-                        {value: 'today', label: 'Today'},
-                        {value: 'week', label: 'This Week'},
-                        {value: 'month', label: 'This Month'},
-                    ]}
-                />
-            </div>
-            <Card>
-                <h3 className="text-2xl font-semibold text-gray-700 mb-6">My Completed Tasks</h3>
-                {filteredCompleted.length === 0 ? <p className="text-gray-500">You haven't completed tasks in this period.</p> : (
-                     <ul className="space-y-3">
-                        {filteredCompleted.sort((a,b) => b.dateSubmitted.toMillis() - a.dateSubmitted.toMillis()).map(ct => (
-                            <li key={ct.id} className="p-3 bg-gray-50 rounded-lg shadow-sm">
-                                <p className="font-medium text-gray-800">{ct.taskName}</p>
-                                <p className="text-sm text-gray-500">
-                                    Submitted: {ct.dateSubmitted?.toDate().toLocaleDateString()} - 
-                                    Status: <span className={`font-semibold ${ct.status === 'approved' ? 'text-green-600' : 'text-yellow-600'}`}>{ct.status}</span>
-                                    {ct.status === 'approved' && ` (+${ct.taskPoints} pts)`}
-                                </p>
-                            </li>
-                        ))}
-                    </ul>
-                )}
-            </Card>
-            <Card>
-                <h3 className="text-2xl font-semibold text-gray-700 mb-6">My Redeemed Rewards</h3>
-                {filteredRedeemed.length === 0 ? <p className="text-gray-500">You haven't redeemed rewards in this period.</p> : (
-                    <ul className="space-y-3">
-                        {filteredRedeemed.sort((a,b) => b.dateRedeemed.toMillis() - a.dateRedeemed.toMillis()).map(rr => (
-                            <li key={rr.id} className="p-3 bg-gray-50 rounded-lg shadow-sm">
-                                <p className="font-medium text-gray-800">{rr.rewardName}</p>
-                                <p className="text-sm text-gray-500">Redeemed: {rr.dateRedeemed?.toDate().toLocaleDateString()} for {rr.pointsSpent} points</p>
-                            </li>
-                        ))}
-                    </ul>
-                )}
-            </Card>
-        </div>
-    );
+    return (<div className="space-y-8">
+        <div className="flex justify-end mb-0 -mt-4"><SelectField value={filterPeriod} onChange={e => setFilterPeriod(e.target.value)} options={[{value:'all',label:'All Time'},{value:'today',label:'Today'},{value:'week',label:'This Week'},{value:'month',label:'This Month'}]}/></div>
+        <Card><h3 className="text-2xl font-semibold text-gray-700 mb-6">My Task History</h3>
+            {fCompleted.length === 0 ? <p className="text-gray-500">No tasks submitted for this period.</p> : (
+                <ul className="space-y-3">{fCompleted.map(ct => (<li key={ct.id} className={`p-3 rounded-lg shadow-sm ${ct.status === 'rejected' ? 'bg-red-50' : (ct.status === 'approved' ? 'bg-green-50' : 'bg-yellow-50')}`}>
+                    <p className="font-medium text-gray-800">{ct.taskName}</p>
+                    <p className="text-sm text-gray-500">Submitted: {ct.dateSubmitted?.toDate().toLocaleDateString()}</p>
+                    <p className="text-sm text-gray-500">Status: <span className={`font-semibold ${getStatusClass(ct.status)}`}>{ct.status?.replace(/_/g, ' ') || 'Pending'}</span>
+                        {ct.status==='approved' && ` (+${ct.pointsAwarded || 0} pts)`}
+                    </p>
+                    {ct.approvalNote && <p className="text-xs text-gray-600 mt-1 italic">Parent Note: {ct.approvalNote}</p>}
+                    {ct.processedBy && <p className="text-xs text-gray-500 mt-1">Processed by: {ct.processedBy}</p>}
+                </li>))}</ul>)}
+        </Card>
+        <Card><h3 className="text-2xl font-semibold text-gray-700 mb-6">My Redeemed Rewards</h3>
+            {fRedeemed.length === 0 ? <p className="text-gray-500">No rewards redeemed for this period.</p> : (
+                <ul className="space-y-3">{fRedeemed.map(rr => (<li key={rr.id} className={`p-3 rounded-lg shadow-sm ${rr.status === 'cancelled_by_parent' ? 'bg-pink-50' : (rr.status === 'fulfilled' ? 'bg-purple-50' : (rr.status === 'pending_fulfillment' ? 'bg-blue-50' : 'bg-gray-50')) }`}>
+                    <p className="font-medium text-gray-800">{rr.rewardName}</p>
+                    <p className="text-sm text-gray-500">Requested: {rr.dateRedeemed?.toDate().toLocaleDateString()} for {rr.pointsSpent} points</p>
+                    <p className="text-sm text-gray-500">Status: <span className={`font-semibold ${getStatusClass(rr.status)}`}>{rr.status?.replace(/_/g, ' ') || 'Unknown'}</span></p>
+                    {rr.dateFulfilled && <p className="text-xs text-gray-500">Fulfilled: {rr.dateFulfilled.toDate().toLocaleDateString()}</p>}
+                    {rr.dateCancelled && <p className="text-xs text-gray-500">Cancelled: {rr.dateCancelled.toDate().toLocaleDateString()}</p>}
+                    {rr.cancellationNote && <p className="text-xs text-gray-600 mt-1 italic">Parent Note: {rr.cancellationNote}</p>}
+                    {(rr.fulfilledBy || rr.cancelledBy) && <p className="text-xs text-gray-500 mt-1">Processed by: {rr.fulfilledBy || rr.cancelledBy}</p>}
+                </li>))}</ul>)}
+        </Card>
+    </div>);
 };
 
 export default App;
