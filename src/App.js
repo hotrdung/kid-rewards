@@ -1,6 +1,6 @@
 /* global __firebase_config, __app_id, __initial_auth_token */
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { initializeApp } from 'firebase/app';
 import {
     getAuth,
@@ -1026,6 +1026,7 @@ const ManageFamilyParents = ({ families, showConfirmation, currentUser }) => {
 const ParentDashboard = ({ user, familyId, kids, tasks, rewards, completedTasks, redeemedRewardsData, showConfirmation, allRewardsGlobal, switchToAdminViewFunc, switchToFamilyViewFunc }) => {
     const [activeTab, setActiveTab] = useState('tasks');
     const [showMoreNav, setShowMoreNav] = useState(false);
+    const moreNavContainerRef = useRef(null);
 
     const pendingTasks = completedTasks.filter(task => task.status === 'pending_approval');
     const pendingFulfillmentRewards = redeemedRewardsData.filter(reward => reward.status === 'pending_fulfillment');
@@ -1044,6 +1045,15 @@ const ParentDashboard = ({ user, familyId, kids, tasks, rewards, completedTasks,
     const handleTabClick = (tabName, isFromMoreMenu = false) => {
         setActiveTab(tabName);
         if (isFromMoreMenu) {
+            setShowMoreNav(false);
+        }
+    };
+
+    const handleMoreNavBlur = (event) => {
+        // event.relatedTarget is the element receiving focus.
+        // moreNavContainerRef.current is the div containing the "More" button and its dropdown.
+        // If relatedTarget is null (e.g., clicked on non-focusable area) or not inside the container, close the menu.
+        if (moreNavContainerRef.current && !moreNavContainerRef.current.contains(event.relatedTarget)) {
             setShowMoreNav(false);
         }
     };
@@ -1110,7 +1120,11 @@ const ParentDashboard = ({ user, familyId, kids, tasks, rewards, completedTasks,
                             />
                         </div>
                     ))}
-                    <div className="relative flex-1 min-w-[80px] sm:min-w-0">
+                    <div
+                        ref={moreNavContainerRef}
+                        onBlur={handleMoreNavBlur}
+                        className="relative flex-1 min-w-[80px] sm:min-w-0"
+                    >
                         <button
                             onClick={() => setShowMoreNav(!showMoreNav)}
                             className={`flex items-center w-full text-left px-3 py-2 rounded-lg transition-colors duration-150 text-sm text-gray-600 hover:bg-purple-100 ${showMoreNav ? 'bg-purple-100' : ''}`}
