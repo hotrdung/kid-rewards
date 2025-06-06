@@ -71,15 +71,78 @@ const getOldPublicDataCollectionPath = (collectionName) => `/artifacts/${current
 const usersCollectionPath = getGlobalCollectionPath('users');
 const familiesCollectionPath = getGlobalCollectionPath('families');
 
-// --- Date Helper Functions (Unchanged) ---
+// --- Date Helper Functions ---
+const MONTHS_SHORT = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const DAYS_SHORT_FORMAT = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]; // For DDD format in formatTaskDueDate
+
 const getStartOfDay = (date) => { const d = new Date(date); d.setHours(0, 0, 0, 0); return d; };
 const getEndOfDay = (date) => { const d = new Date(date); d.setHours(23, 59, 59, 999); return d; };
 const getStartOfWeek = (date) => { const d = new Date(date); const day = d.getDay(); const diff = d.getDate() - day + (day === 0 ? -6 : 1); return getStartOfDay(new Date(d.setDate(diff))); };
 const getEndOfWeek = (date) => { const startOfWeek = getStartOfWeek(date); const d = new Date(startOfWeek); d.setDate(d.getDate() + 6); return getEndOfDay(d); };
 const getStartOfMonth = (date) => getStartOfDay(new Date(date.getFullYear(), date.getMonth(), 1));
-const getEndOfMonth = (date) => getEndOfDay(new Date(date.getFullYear(), date.getMonth() + 1, 0)); const DAYS_OF_WEEK = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
+const getEndOfMonth = (date) => getEndOfDay(new Date(date.getFullYear(), date.getMonth() + 1, 0));
+
+const formatShortDate = (dateInput) => {
+    if (!dateInput) return 'N/A';
+    const d = dateInput instanceof Date ? dateInput : dateInput.toDate ? dateInput.toDate() : new Date(dateInput);
+    if (isNaN(d.getTime())) return 'Invalid Date';
+    return `${MONTHS_SHORT[d.getMonth()]} ${d.getDate().toString().padStart(2, '0')}`;
+};
+
+const formatTaskDueDate = (dateInput) => {
+    if (!dateInput) return 'N/A';
+    const d = dateInput instanceof Date ? dateInput : dateInput.toDate ? dateInput.toDate() : new Date(dateInput);
+    if (isNaN(d.getTime())) return 'Invalid Date';
+    return `${DAYS_SHORT_FORMAT[d.getDay()]} ${MONTHS_SHORT[d.getMonth()]} ${d.getDate().toString().padStart(2, '0')}`;
+};
+
+const DAYS_OF_WEEK = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
 const DAY_LABELS_SHORT = ["Su", "M", "Tu", "W", "Th", "F", "Sa"];
-const calculateNextDueDate = (task, fromDateInput = new Date()) => { const fromDate = getStartOfDay(new Date(fromDateInput)); if (!task.recurrenceType || task.recurrenceType === 'none') { return task.customDueDate ? Timestamp.fromDate(getStartOfDay(new Date(task.customDueDate))) : null; } let startDate = task.startDate ? getStartOfDay(new Date(task.startDate)) : getStartOfDay(new Date()); let candidateDate = new Date(Math.max(fromDate.getTime(), startDate.getTime())); if (task.nextDueDate && task.nextDueDate.toDate) { const currentNextDue = getStartOfDay(task.nextDueDate.toDate()); if (currentNextDue >= fromDate && currentNextDue >= startDate) { candidateDate = new Date(currentNextDue); } } if (candidateDate < startDate) candidateDate = new Date(startDate); switch (task.recurrenceType) { case 'daily': if (candidateDate <= fromDate) candidateDate.setDate(candidateDate.getDate() + 1); if (candidateDate < startDate) candidateDate = new Date(startDate); break; case 'weekly': if (!task.daysOfWeek || task.daysOfWeek.length === 0) return null; const selectedDayIndexes = task.daysOfWeek.map(day => DAYS_OF_WEEK.indexOf(day)).sort((a, b) => a - b); if (selectedDayIndexes.length === 0) return null; let attempts = 0; const currentDayOfCandidate = candidateDate.getDay(); if (candidateDate <= fromDate && !(selectedDayIndexes.includes(currentDayOfCandidate) && candidateDate.getTime() === fromDate.getTime())) { candidateDate.setDate(candidateDate.getDate() + 1); } if (candidateDate < startDate) candidateDate = new Date(startDate); while (attempts < 14) { const dayOfWeek = candidateDate.getDay(); for (const selectedDay of selectedDayIndexes) { if (selectedDay >= dayOfWeek) { const potentialDate = new Date(candidateDate); potentialDate.setDate(potentialDate.getDate() + (selectedDay - dayOfWeek)); if (potentialDate >= startDate && potentialDate >= fromDate) { return Timestamp.fromDate(getStartOfDay(potentialDate)); } } } candidateDate.setDate(candidateDate.getDate() + (7 - dayOfWeek)); if (candidateDate < startDate) candidateDate = new Date(startDate); attempts++; } return null; case 'monthly': const targetDayOfMonth = new Date(task.startDate).getDate(); if (candidateDate <= fromDate || candidateDate.getDate() > targetDayOfMonth) { if (candidateDate.getDate() > targetDayOfMonth && candidateDate.getMonth() === fromDate.getMonth() && candidateDate.getFullYear() === fromDate.getFullYear()) { /* same month but past target day */ } else { candidateDate.setMonth(candidateDate.getMonth() + 1); } } candidateDate.setDate(targetDayOfMonth); while (candidateDate.getDate() !== targetDayOfMonth) { candidateDate.setDate(targetDayOfMonth - 1); candidateDate.setMonth(candidateDate.getMonth() + 1); candidateDate.setDate(targetDayOfMonth); } while (candidateDate < startDate) { candidateDate.setMonth(candidateDate.getMonth() + 1); candidateDate.setDate(targetDayOfMonth); while (candidateDate.getDate() !== targetDayOfMonth) { candidateDate.setDate(targetDayOfMonth - 1); candidateDate.setMonth(candidateDate.getMonth() + 1); candidateDate.setDate(targetDayOfMonth); } } return Timestamp.fromDate(getStartOfDay(candidateDate)); default: return null; } return Timestamp.fromDate(getStartOfDay(candidateDate)); };
+const calculateNextDueDate = (task, fromDateInput = new Date()) => {
+    const fromDate = getStartOfDay(new Date(fromDateInput)); if (!task.recurrenceType || task.recurrenceType === 'none') { return task.customDueDate ? Timestamp.fromDate(getStartOfDay(new Date(task.customDueDate))) : null; } let startDate = task.startDate ? getStartOfDay(new Date(task.startDate)) : getStartOfDay(new Date()); let candidateDate = new Date(Math.max(fromDate.getTime(), startDate.getTime())); if (task.nextDueDate && task.nextDueDate.toDate) { const currentNextDue = getStartOfDay(task.nextDueDate.toDate()); if (currentNextDue >= fromDate && currentNextDue >= startDate) { candidateDate = new Date(currentNextDue); } } if (candidateDate < startDate) candidateDate = new Date(startDate); switch (task.recurrenceType) {
+        case 'daily': if (candidateDate <= fromDate) candidateDate.setDate(candidateDate.getDate() + 1); if (candidateDate < startDate) candidateDate = new Date(startDate); break; case 'weekly': if (!task.daysOfWeek || task.daysOfWeek.length === 0) return null; const selectedDayIndexes = task.daysOfWeek.map(day => DAYS_OF_WEEK.indexOf(day)).sort((a, b) => a - b); if (selectedDayIndexes.length === 0) return null; let attempts = 0; const currentDayOfCandidate = candidateDate.getDay(); if (candidateDate <= fromDate && !(selectedDayIndexes.includes(currentDayOfCandidate) && candidateDate.getTime() === fromDate.getTime())) { candidateDate.setDate(candidateDate.getDate() + 1); } if (candidateDate < startDate) candidateDate = new Date(startDate); while (attempts < 14) {
+            const dayOfWeek = candidateDate.getDay(); for (const selectedDay of selectedDayIndexes) {
+                if (selectedDay >= dayOfWeek) {
+                    const potentialDate = new Date(candidateDate); potentialDate.setDate(potentialDate.getDate() + (selectedDay - dayOfWeek)); if (potentialDate >= startDate && potentialDate >= fromDate) { // If fromDate is the completion date, this allows the same day if it's in the future.
+                        // However, when called after completion, fromDate is already advanced by one day.
+                        // So this check should be fine.
+                        return Timestamp.fromDate(getStartOfDay(potentialDate));
+                    }
+                }
+            } candidateDate.setDate(candidateDate.getDate() + (7 - dayOfWeek)); if (candidateDate < startDate) candidateDate = new Date(startDate); attempts++;
+        } return null;
+        case 'monthly':
+            const targetDayOfMonth = new Date(task.startDate).getDate();
+            let monthCandidate = new Date(Math.max(fromDate.getTime(), startDate.getTime()));
+
+            // If the monthCandidate's current day is past the target day for its current month, advance to the next month.
+            // This is simplified because `fromDate` (when called from task completion) is already the day *after* the completed due date.
+            if (monthCandidate.getDate() > targetDayOfMonth) {
+                monthCandidate.setMonth(monthCandidate.getMonth() + 1);
+            }
+            monthCandidate.setDate(targetDayOfMonth);
+
+            // Ensure the date is valid (e.g., Feb 30 becomes Mar 2) and is the target day.
+            // Also ensure it's >= fromDate and >= startDate.
+            // The loop handles advancing months if the setDate resulted in an earlier date than fromDate/startDate
+            // or if the day of the month is incorrect due to month rollover (e.g. setting 31st for April).
+            while (monthCandidate.getDate() !== targetDayOfMonth || monthCandidate < startDate || monthCandidate < fromDate) {
+                monthCandidate.setMonth(monthCandidate.getMonth() + 1);
+                monthCandidate.setDate(targetDayOfMonth); // Try setting the day in the new month
+                // Re-check if day is still wrong (e.g. for Feb, if targetDayOfMonth > 28/29)
+                if (monthCandidate.getDate() !== targetDayOfMonth) {
+                    // This happens if targetDayOfMonth is, e.g., 31 and current month is April.
+                    // monthCandidate would become May 1st after setDate(31) on April.
+                    // We need to correct it to be targetDayOfMonth of the *correct* month.
+                    monthCandidate.setDate(0); // last day of previous month (e.g. April 30th)
+                    monthCandidate.setMonth(monthCandidate.getMonth() + 1); // go to correct month (e.g. May)
+                    monthCandidate.setDate(targetDayOfMonth); // set the target day (e.g. May 31st, if target was 31)
+                }
+            }
+            candidateDate = monthCandidate;
+            break; default: return null;
+    } return Timestamp.fromDate(getStartOfDay(candidateDate));
+};
 
 // --- Helper Components ---
 const Modal = ({ isOpen, onClose, title, children, size = "max-w-md" }) => {
@@ -1451,8 +1514,8 @@ const ManageTasks = ({ familyId, tasksInFamily, kidsInFamily, showConfirmation }
             isActive: true,
         };
         const baseDateForCalc = taskData.recurrenceType === 'none'
-            ? new Date(taskData.customDueDate)
-            : new Date(taskData.startDate);
+            ? new Date(taskData.customDueDate + 'T00:00:00') // Ensure it's a Date object
+            : new Date(taskData.startDate + 'T00:00:00'); // Ensure it's a Date object
         taskData.nextDueDate = calculateNextDueDate({ ...taskData }, baseDateForCalc);
 
         try {
@@ -1497,8 +1560,8 @@ const ManageTasks = ({ familyId, tasksInFamily, kidsInFamily, showConfirmation }
                 let valA = a[sortConfig.key];
                 let valB = b[sortConfig.key];
                 if (sortConfig.key === 'startDate') {
-                    valA = new Date(valA).getTime();
-                    valB = new Date(valB).getTime();
+                    valA = new Date(valA + 'T00:00:00').getTime(); // Ensure comparison as date
+                    valB = new Date(valB + 'T00:00:00').getTime(); // Ensure comparison as date
                 }
                 if (valA < valB) return sortConfig.direction === 'ascending' ? -1 : 1;
                 if (valA > valB) return sortConfig.direction === 'ascending' ? 1 : -1;
@@ -1574,12 +1637,12 @@ const ManageTasks = ({ familyId, tasksInFamily, kidsInFamily, showConfirmation }
                                             Recurrence: <span className="font-medium">{recurrenceDisplay}</span>
                                         </p>
                                         <p className="text-xs text-gray-500">
-                                            Starts: <span className="font-medium">{task.startDate ? new Date(task.startDate + 'T00:00:00').toLocaleDateString() : 'N/A'}</span>
-                                            {task.customDueDate && task.recurrenceType === 'none' && ` | Due: ${new Date(task.customDueDate + 'T00:00:00').toLocaleDateString()}`}
+                                            Starts: <span className="font-medium">{formatShortDate(task.startDate ? new Date(task.startDate + 'T00:00:00') : null)}</span>
+                                            {task.customDueDate && task.recurrenceType === 'none' && ` | Due: ${formatShortDate(task.customDueDate ? new Date(task.customDueDate + 'T00:00:00') : null)}`}
                                         </p>
                                         {task.nextDueDate && task.recurrenceType !== 'none' && (
                                             <p className="text-xs text-gray-500">
-                                                Next Due: <span className="font-medium">{task.nextDueDate.toDate().toLocaleDateString()}</span>
+                                                Next Due: <span className="font-medium">{formatShortDate(task.nextDueDate)}</span>
                                             </p>
                                         )}
                                         <p className="text-xs text-gray-500">
@@ -1901,14 +1964,18 @@ const ApproveTasks = ({ familyId, pendingTasks, kidsInFamily, allTasksInFamily, 
 
             // If approved and task is recurring, calculate next due date
             if (status === 'approved' && mainTaskData.recurrenceType && mainTaskData.recurrenceType !== 'none') {
+                const completedTaskDueDate = currentTaskForApproval.taskDueDate.toDate();
+                const dayAfterCompletedTaskDueDate = new Date(completedTaskDueDate);
+                dayAfterCompletedTaskDueDate.setDate(dayAfterCompletedTaskDueDate.getDate() + 1);
+
                 const newNextDueDate = calculateNextDueDate(
                     {
                         ...mainTaskData,
                         startDate: new Date(mainTaskData.startDate), // ensure Date object
                         customDueDate: mainTaskData.customDueDate ? new Date(mainTaskData.customDueDate) : null,
-                        nextDueDate: currentTaskForApproval.taskDueDate // Pass current completed task's due date as reference
+                        nextDueDate: currentTaskForApproval.taskDueDate // Pass current task's nextDueDate as part of task object for reference if needed by calc function
                     },
-                    currentTaskForApproval.taskDueDate.toDate() // Base calculation from the completed task's due date
+                    dayAfterCompletedTaskDueDate // Base calculation for *next* due date starts from day after completion
                 );
                 if (newNextDueDate) {
                     batch.update(mainTaskRef, { nextDueDate: newNextDueDate });
@@ -1945,8 +2012,8 @@ const ApproveTasks = ({ familyId, pendingTasks, kidsInFamily, allTasksInFamily, 
                                 <p className="font-semibold text-lg text-gray-800">
                                     {kid.name} completed: <span className="text-blue-600">{ct.taskName}</span>
                                 </p>
-                                <p className="text-sm text-gray-500">Submitted: {ct.dateSubmitted?.toDate().toLocaleDateString()}</p>
-                                <p className="text-sm text-gray-500">Originally Due: {ct.taskDueDate?.toDate().toLocaleDateString()}</p>
+                                <p className="text-sm text-gray-500">Submitted: {formatShortDate(ct.dateSubmitted)}</p>
+                                <p className="text-sm text-gray-500">Originally Due: {formatShortDate(ct.taskDueDate)}</p>
                                 <p className="text-sm text-purple-600 font-semibold">Original Points: {ct.taskPoints}</p>
                             </div>
                             <Button onClick={() => openApprovalModal(ct)} className="bg-indigo-500 hover:bg-indigo-600" icon={Edit3}>
@@ -1960,8 +2027,8 @@ const ApproveTasks = ({ familyId, pendingTasks, kidsInFamily, allTasksInFamily, 
                 {currentTaskForApproval && (
                     <div>
                         <p><strong>Kid:</strong> {kidsInFamily.find(k => k.id === currentTaskForApproval.kidId)?.name}</p>
-                        <p><strong>Submitted:</strong> {currentTaskForApproval.dateSubmitted?.toDate().toLocaleString()}</p>
-                        <p><strong>Original Due:</strong> {currentTaskForApproval.taskDueDate?.toDate().toLocaleDateString()}</p>
+                        <p><strong>Submitted:</strong> {formatShortDate(currentTaskForApproval.dateSubmitted)}</p>
+                        <p><strong>Original Due:</strong> {formatShortDate(currentTaskForApproval.taskDueDate)}</p>
                         <div className="my-4">
                             <label className="block text-sm font-medium text-gray-700 mb-1">
                                 Adjust Points (Original: {currentTaskForApproval.taskPoints})
@@ -2143,7 +2210,7 @@ const FulfillRewards = ({ familyId, pendingRewards, kidsInFamily, allRewardsList
                                     <p className="font-semibold text-lg text-gray-800">
                                         {kid?.name || 'Unknown Kid'} redeemed: <span className="text-yellow-600">{rr.rewardName}</span>
                                     </p>
-                                    <p className="text-sm text-gray-500">Requested: {rr.dateRedeemed?.toDate().toLocaleDateString()}</p>
+                                    <p className="text-sm text-gray-500">Requested: {formatShortDate(rr.dateRedeemed)}</p>
                                     <p className="text-sm text-gray-500">Cost: {rr.pointsSpent} points</p>
                                     {rewardInfo && (
                                         <p className="text-xs text-gray-400 italic">
@@ -2232,7 +2299,7 @@ const ParentRewardHistory = ({ familyId, redeemedRewards, completedTasks, kidsIn
 
                                     return (
                                         <tr key={rr.id} className={statusClass.split(' ')[0] /* only background part */}>
-                                            <td className="px-4 py-2 whitespace-nowrap text-sm">{rr.dateRedeemed?.toDate().toLocaleDateString()}</td>
+                                            <td className="px-4 py-2 whitespace-nowrap text-sm">{formatShortDate(rr.dateRedeemed)}</td>
                                             <td className="px-4 py-2 whitespace-nowrap text-sm">{k?.name || 'N/A'}</td>
                                             <td className="px-4 py-2 whitespace-nowrap text-sm">{rr.rewardName || 'N/A'}</td>
                                             <td className="px-4 py-2 whitespace-nowrap text-sm">{rr.pointsSpent}</td>
@@ -2278,7 +2345,7 @@ const ParentRewardHistory = ({ familyId, redeemedRewards, completedTasks, kidsIn
 
                                     return (
                                         <tr key={ct.id} className={statusBgClass}>
-                                            <td className="px-4 py-2 whitespace-nowrap text-sm">{ct.dateApprovedOrRejected?.toDate().toLocaleDateString()}</td>
+                                            <td className="px-4 py-2 whitespace-nowrap text-sm">{formatShortDate(ct.dateApprovedOrRejected)}</td>
                                             <td className="px-4 py-2 whitespace-nowrap text-sm">{k?.name || ct.kidName || 'N/A'}</td>
                                             <td className="px-4 py-2 whitespace-nowrap text-sm">{ct.taskName}</td>
                                             <td className={`px-4 py-2 whitespace-nowrap text-sm font-medium ${statusClass}`}>
@@ -2424,11 +2491,10 @@ const KidTasksList = ({ kid, familyId, allTasks, completedTasks, showConfirmatio
     const [feedbackType, setFeedbackType] = useState('info'); // 'info', 'success', 'error'
     const [taskViewPeriod, setTaskViewPeriod] = useState('today'); // 'today' or 'week'
 
-    const now = new Date();
-    const todayStart = getStartOfDay(now);
-    const todayEnd = getEndOfDay(now);
-    const weekStart = getStartOfWeek(now);
-    const weekEnd = getEndOfWeek(now);
+    const today = getStartOfDay(new Date()); // Consistent "today" for calculations
+    const todayEnd = getEndOfDay(today);
+    const weekStart = getStartOfWeek(today);
+    const weekEnd = getEndOfWeek(today);
 
     const tasksToShow = useMemo(() => {
         return allTasks.filter(task => {
@@ -2437,8 +2503,8 @@ const KidTasksList = ({ kid, familyId, allTasks, completedTasks, showConfirmatio
                 return false;
             }
 
-            const taskStartDate = task.startDate ? getStartOfDay(new Date(task.startDate)) : todayStart;
-            if (now < taskStartDate) return false; // Task hasn't started yet
+            const taskStartDate = task.startDate ? getStartOfDay(new Date(task.startDate)) : today;
+            if (today < taskStartDate) return false; // Task hasn't started yet
 
             if (task.recurrenceType === 'none') {
                 const customDueDate = task.customDueDate ? getEndOfDay(new Date(task.customDueDate)) : null;
@@ -2453,7 +2519,7 @@ const KidTasksList = ({ kid, familyId, allTasks, completedTasks, showConfirmatio
 
                 // Show if not completed/pending for this specific due date, AND due date is relevant to selected period
                 return !completedOrPendingForThisDueDate &&
-                    customDueDate >= todayStart && // Must be at least today
+                    customDueDate >= today && // Must be at least today
                     customDueDate <= (taskViewPeriod === 'today' ? todayEnd : weekEnd); // And within today/week
 
             } else { // Recurring tasks
@@ -2461,7 +2527,7 @@ const KidTasksList = ({ kid, familyId, allTasks, completedTasks, showConfirmatio
                 if (!nextDueDate) return false;
 
                 // Check if the next due date falls within the selected period
-                const isDueInPeriod = (taskViewPeriod === 'today' && nextDueDate.getTime() === todayStart.getTime()) ||
+                const isDueInPeriod = (taskViewPeriod === 'today' && nextDueDate.getTime() === today.getTime()) ||
                     (taskViewPeriod === 'week' && nextDueDate >= weekStart && nextDueDate <= weekEnd);
 
                 if (!isDueInPeriod) return false;
@@ -2476,17 +2542,17 @@ const KidTasksList = ({ kid, familyId, allTasks, completedTasks, showConfirmatio
                 return !submittedOrApprovedForThisDueDate;
             }
         }).sort((a, b) => {
-            const dueDateA = a.recurrenceType === 'none' ? (a.customDueDate ? new Date(a.customDueDate).getTime() : 0) : (a.nextDueDate?.toMillis() || 0);
-            const dueDateB = b.recurrenceType === 'none' ? (b.customDueDate ? new Date(b.customDueDate).getTime() : 0) : (b.nextDueDate?.toMillis() || 0);
+            const dueDateA = a.recurrenceType === 'none' ? (a.customDueDate ? getStartOfDay(new Date(a.customDueDate)).getTime() : 0) : (a.nextDueDate?.toMillis() || 0);
+            const dueDateB = b.recurrenceType === 'none' ? (b.customDueDate ? getStartOfDay(new Date(b.customDueDate)).getTime() : 0) : (b.nextDueDate?.toMillis() || 0);
             return dueDateA - dueDateB;
         });
-    }, [allTasks, kid.id, completedTasks, taskViewPeriod, todayStart, todayEnd, weekStart, weekEnd, now]);
+    }, [allTasks, kid.id, completedTasks, taskViewPeriod, today, todayEnd, weekStart, weekEnd]);
 
 
     const handleCompleteTask = async (task) => {
         // Determine the correct due date for this completion instance
         const taskDueDateForCompletion = task.recurrenceType === 'none'
-            ? (task.customDueDate ? Timestamp.fromDate(getStartOfDay(new Date(task.customDueDate))) : Timestamp.fromDate(todayStart))
+            ? (task.customDueDate ? Timestamp.fromDate(getStartOfDay(new Date(task.customDueDate))) : Timestamp.fromDate(today))
             : task.nextDueDate; // For recurring, this should be the specific instance they are completing
 
         if (!taskDueDateForCompletion) {
@@ -2590,20 +2656,43 @@ const KidTasksList = ({ kid, familyId, allTasks, completedTasks, showConfirmatio
                 <ul className="space-y-4">
                     {tasksToShow.map(task => {
                         // For display, use the relevant due date
-                        const displayDueDate = task.recurrenceType === 'none'
-                            ? (task.customDueDate ? new Date(task.customDueDate + 'T00:00:00') : null) // Add T00:00:00 to ensure correct local date
-                            : task.nextDueDate?.toDate();
+                        const taskSpecificDueDate = task.recurrenceType === 'none'
+                            ? (task.customDueDate ? getStartOfDay(new Date(task.customDueDate)) : null)
+                            : (task.nextDueDate?.toDate ? getStartOfDay(task.nextDueDate.toDate()) : null);
 
                         // Find if there's a pending submission for THIS specific task instance's due date
                         const pendingSubmission = completedTasks.find(ct =>
                             ct.taskId === task.id &&
                             ct.kidId === kid.id &&
                             ct.status === 'pending_approval' &&
-                            ct.taskDueDate?.toDate().getTime() === (displayDueDate?.getTime())
+                            ct.taskDueDate?.toDate().getTime() === (taskSpecificDueDate?.getTime())
                         );
 
+                        let dueDateDisplayContent;
+                        if (taskSpecificDueDate) {
+                            const diffDays = Math.ceil((taskSpecificDueDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+
+                            if (diffDays < 0) {
+                                dueDateDisplayContent = (
+                                    <span className="flex items-center text-red-500 font-medium">
+                                        <AlertTriangle size={14} className="mr-1" /> Overdue
+                                    </span>
+                                );
+                            } else if (diffDays <= 3 && task.recurrenceType !== 'daily') {
+                                dueDateDisplayContent = (
+                                    <span className="flex items-center text-orange-500 font-medium">
+                                        <Bell size={14} className="mr-1" /> {diffDays === 0 ? 'Today' : `${diffDays} day${diffDays !== 1 ? 's' : ''} left`}
+                                    </span>
+                                );
+                            } else {
+                                dueDateDisplayContent = formatTaskDueDate(taskSpecificDueDate);
+                            }
+                        } else {
+                            dueDateDisplayContent = 'N/A';
+                        }
+
                         return (
-                            <li key={task.id + (displayDueDate?.toISOString() || '')} className="p-4 bg-gray-50 rounded-lg shadow-sm flex flex-col sm:flex-row justify-between items-start sm:items-center">
+                            <li key={task.id + (taskSpecificDueDate?.toISOString() || '')} className="p-4 bg-gray-50 rounded-lg shadow-sm flex flex-col sm:flex-row justify-between items-start sm:items-center">
                                 <div className="mb-2 sm:mb-0">
                                     <span className="font-semibold text-lg text-gray-800">{task.name}</span>
                                     <div className="flex items-center text-sm text-purple-600 font-semibold">
@@ -2614,11 +2703,9 @@ const KidTasksList = ({ kid, familyId, allTasks, completedTasks, showConfirmatio
                                         )}
                                         <span className="ml-1">points</span>
                                     </div>
-                                    {displayDueDate && (
-                                        <p className="text-xs text-gray-500">
-                                            Due: {displayDueDate.toLocaleDateString()}
-                                        </p>
-                                    )}
+                                    <p className="text-xs text-gray-500 mt-0.5">
+                                        Due: {dueDateDisplayContent}
+                                    </p>
                                 </div>
                                 {pendingSubmission ? (
                                     <Button onClick={() => confirmWithdrawTask(pendingSubmission)} className="bg-yellow-500 hover:bg-yellow-600" icon={RefreshCcw}>
@@ -2823,8 +2910,8 @@ const KidHistory = ({ kid, familyId, completedTasks, redeemedRewards }) => {
                             <li key={ct.id} className={`p-3 rounded-lg shadow-sm ${getStatusBgClass(ct.status)}`}>
                                 <p className="font-medium text-gray-800">{ct.taskName}</p>
                                 <p className="text-sm text-gray-500">
-                                    Submitted: {ct.dateSubmitted?.toDate().toLocaleDateString()}
-                                    {ct.taskDueDate && ` (Due: ${ct.taskDueDate.toDate().toLocaleDateString()})`}
+                                    Submitted: {formatShortDate(ct.dateSubmitted)}
+                                    {ct.taskDueDate && ` (Due: ${formatShortDate(ct.taskDueDate)})`}
                                 </p>
                                 <p className="text-sm text-gray-500">
                                     Status: <span className={`font-semibold ${getStatusClass(ct.status)}`}>
@@ -2836,7 +2923,7 @@ const KidHistory = ({ kid, familyId, completedTasks, redeemedRewards }) => {
                                 {ct.processedBy && <p className="text-xs text-gray-500 mt-1">Processed by: {ct.processedBy}</p>}
                                 {ct.dateApprovedOrRejected && (
                                     <p className="text-xs text-gray-400 mt-0.5">
-                                        Reviewed: {ct.dateApprovedOrRejected.toDate().toLocaleDateString()}
+                                        Reviewed: {formatShortDate(ct.dateApprovedOrRejected)}
                                     </p>
                                 )}
                             </li>
@@ -2854,15 +2941,15 @@ const KidHistory = ({ kid, familyId, completedTasks, redeemedRewards }) => {
                             <li key={rr.id} className={`p-3 rounded-lg shadow-sm ${getStatusBgClass(rr.status)}`}>
                                 <p className="font-medium text-gray-800">{rr.rewardName}</p>
                                 <p className="text-sm text-gray-500">
-                                    Requested: {rr.dateRedeemed?.toDate().toLocaleDateString()} for {rr.pointsSpent} points
+                                    Requested: {formatShortDate(rr.dateRedeemed)} for {rr.pointsSpent} points
                                 </p>
                                 <p className="text-sm text-gray-500">
                                     Status: <span className={`font-semibold ${getStatusClass(rr.status)}`}>
                                         {rr.status?.replace(/_/g, ' ') || 'Unknown'}
                                     </span>
                                 </p>
-                                {rr.dateFulfilled && <p className="text-xs text-gray-500">Fulfilled: {rr.dateFulfilled.toDate().toLocaleDateString()}</p>}
-                                {rr.dateCancelled && <p className="text-xs text-gray-500">Cancelled: {rr.dateCancelled.toDate().toLocaleDateString()}</p>}
+                                {rr.dateFulfilled && <p className="text-xs text-gray-500">Fulfilled: {formatShortDate(rr.dateFulfilled)}</p>}
+                                {rr.dateCancelled && <p className="text-xs text-gray-500">Cancelled: {formatShortDate(rr.dateCancelled)}</p>}
                                 {rr.cancellationNote && <p className="text-xs text-gray-600 mt-1 italic">Parent Note: {rr.cancellationNote}</p>}
                                 {(rr.fulfilledBy || rr.cancelledBy) && <p className="text-xs text-gray-500 mt-1">Processed by: {rr.fulfilledBy || rr.cancelledBy}</p>}
                             </li>
