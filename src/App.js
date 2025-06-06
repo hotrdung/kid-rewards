@@ -1423,7 +1423,7 @@ const ManageTasks = ({ familyId, tasksInFamily, kidsInFamily, showConfirmation }
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [editingTask, setEditingTask] = useState(null);
     const [formError, setFormError] = useState('');
-    const [sortConfig, setSortConfig] = useState({ key: 'startDate', direction: 'ascending' });
+    const [sortConfig, setSortConfig] = useState({ key: 'effectiveDate', direction: 'ascending' });
 
     const initialFormState = {
         name: '', points: '1', recurrenceType: 'none', daysOfWeek: [],
@@ -1556,13 +1556,24 @@ const ManageTasks = ({ familyId, tasksInFamily, kidsInFamily, showConfirmation }
     const sortedTasks = useMemo(() => {
         let sortableItems = [...tasksInFamily];
         if (sortConfig.key !== null) {
-            sortableItems.sort((a, b) => {
+            sortableItems.forEach(task => {
+                if (task.recurrenceType === 'none') {
+                    task.effectiveDate = task.customDueDate ? getStartOfDay(new Date(task.customDueDate)).getTime() : 0;
+                } else {
+                    task.effectiveDate = task.nextDueDate?.toMillis() || (task.startDate ? getStartOfDay(new Date(task.startDate)).getTime() : 0);
+                }
+            });
+
+            sortableItems.sort((a,b) => {
                 let valA = a[sortConfig.key];
                 let valB = b[sortConfig.key];
-                if (sortConfig.key === 'startDate') {
-                    valA = new Date(valA + 'T00:00:00').getTime(); // Ensure comparison as date
-                    valB = new Date(valB + 'T00:00:00').getTime(); // Ensure comparison as date
+
+                // If sorting by points, convert to number for correct comparison
+                if (sortConfig.key === 'points') {
+                    valA = Number(valA);
+                    valB = Number(valB);
                 }
+                // For effectiveDate, it's already a timestamp
                 if (valA < valB) return sortConfig.direction === 'ascending' ? -1 : 1;
                 if (valA > valB) return sortConfig.direction === 'ascending' ? 1 : -1;
                 return 0;
@@ -1589,16 +1600,17 @@ const ManageTasks = ({ familyId, tasksInFamily, kidsInFamily, showConfirmation }
             <div className="flex flex-col sm:flex-row justify-between items-center mb-6 gap-2">
                 <h3 className="text-2xl font-semibold text-gray-700">Tasks</h3>
                 <div className="flex flex-wrap items-center gap-1 sm:gap-2">
+                     {/* Changed default sort to 'effectiveDate' which considers nextDueDate or customDueDate */}
                     <Button
-                        onClick={() => requestSort('startDate')}
-                        className="bg-slate-200 hover:bg-slate-300 text-slate-700 font-medium px-2 sm:px-3 py-1 text-xs sm:text-sm"
+                        onClick={() => requestSort('effectiveDate')}
+                        className="bg-yellow-200 hover:bg-yellow-300 text-yellow-800 font-medium px-2 sm:px-3 py-1 text-xs sm:text-sm"
                         icon={null}
                     >
-                        Start Date {getSortIcon('startDate')}
+                        Due Date {getSortIcon('effectiveDate')}
                     </Button>
                     <Button
                         onClick={() => requestSort('points')}
-                        className="bg-slate-200 hover:bg-slate-300 text-slate-700 font-medium px-2 sm:px-3 py-1 text-xs sm:text-sm"
+                        className="bg-yellow-200 hover:bg-yellow-300 text-yellow-800 font-medium px-2 sm:px-3 py-1 text-xs sm:text-sm"
                         icon={null}
                     >
                         Points {getSortIcon('points')}
@@ -1618,6 +1630,7 @@ const ManageTasks = ({ familyId, tasksInFamily, kidsInFamily, showConfirmation }
             ) : (
                 <ul className="space-y-3">
                     {sortedTasks.map(task => {
+                        const today = getStartOfDay(new Date());
                         const assignedKid = kidsInFamily.find(k => k.id === task.assignedKidId);
                         let recurrenceDisplay = task.recurrenceType || 'None';
                         if (task.recurrenceType === 'weekly' && task.daysOfWeek?.length > 0) {
@@ -1625,6 +1638,34 @@ const ManageTasks = ({ familyId, tasksInFamily, kidsInFamily, showConfirmation }
                         } else if (task.recurrenceType !== 'none') {
                             recurrenceDisplay = task.recurrenceType.charAt(0).toUpperCase() + task.recurrenceType.slice(1);
                         }
+
+                        const taskSpecificDueDate = task.recurrenceType === 'none'
+                            ? (task.customDueDate ? getStartOfDay(new Date(task.customDueDate)) : null)
+                            : (task.nextDueDate?.toDate ? getStartOfDay(task.nextDueDate.toDate()) : null);
+
+                        let dueDateDisplayContent;
+                        if (taskSpecificDueDate) {
+                            const diffDays = Math.ceil((taskSpecificDueDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+
+                            if (diffDays < 0) {
+                                dueDateDisplayContent = (
+                                    <span className="flex items-center text-red-500 font-medium">
+                                        <AlertTriangle size={14} className="mr-1" /> Overdue ({formatTaskDueDate(taskSpecificDueDate)})
+                                    </span>
+                                );
+                            } else if (diffDays <= 3 && task.recurrenceType !== 'daily') {
+                                dueDateDisplayContent = (
+                                    <span className="flex items-center text-orange-500 font-medium">
+                                        <Bell size={14} className="mr-1" /> {diffDays === 0 ? 'Today' : `${diffDays} day${diffDays !== 1 ? 's' : ''} left`} ({formatTaskDueDate(taskSpecificDueDate)})
+                                    </span>
+                                );
+                            } else {
+                                dueDateDisplayContent = formatTaskDueDate(taskSpecificDueDate);
+                            }
+                        } else {
+                            dueDateDisplayContent = `Starts: ${formatShortDate(task.startDate ? new Date(task.startDate + 'T00:00:00') : null)}`;
+                        }
+
                         return (
                             <li key={task.id} className="p-4 bg-gray-50 rounded-lg shadow-sm">
                                 <div className="flex flex-col sm:flex-row justify-between sm:items-start">
@@ -1636,15 +1677,9 @@ const ManageTasks = ({ familyId, tasksInFamily, kidsInFamily, showConfirmation }
                                         <p className="text-xs text-gray-500 mt-1">
                                             Recurrence: <span className="font-medium">{recurrenceDisplay}</span>
                                         </p>
-                                        <p className="text-xs text-gray-500">
-                                            Starts: <span className="font-medium">{formatShortDate(task.startDate ? new Date(task.startDate + 'T00:00:00') : null)}</span>
-                                            {task.customDueDate && task.recurrenceType === 'none' && ` | Due: ${formatShortDate(task.customDueDate ? new Date(task.customDueDate + 'T00:00:00') : null)}`}
+                                        <p className="text-xs text-gray-500 mt-0.5">
+                                            {dueDateDisplayContent}
                                         </p>
-                                        {task.nextDueDate && task.recurrenceType !== 'none' && (
-                                            <p className="text-xs text-gray-500">
-                                                Next Due: <span className="font-medium">{formatShortDate(task.nextDueDate)}</span>
-                                            </p>
-                                        )}
                                         <p className="text-xs text-gray-500">
                                             Assigned to: <span className="font-medium">{assignedKid ? assignedKid.name : 'Any Kid'}</span>
                                         </p>
@@ -1820,14 +1855,14 @@ const ManageRewards = ({ familyId, rewardsInFamily, showConfirmation }) => {
                 <div className="flex flex-wrap items-center gap-1 sm:gap-2">
                     <Button
                         onClick={() => requestSort('name')}
-                        className="bg-slate-200 hover:bg-slate-300 text-slate-700 font-medium px-2 sm:px-3 py-1 text-xs sm:text-sm"
+                        className="bg-yellow-200 hover:bg-yellow-300 text-yellow-800 font-medium px-2 sm:px-3 py-1 text-xs sm:text-sm"
                         icon={null}
                     >
                         Name {getSortIcon('name')}
                     </Button>
                     <Button
                         onClick={() => requestSort('pointCost')}
-                        className="bg-slate-200 hover:bg-slate-300 text-slate-700 font-medium px-2 sm:px-3 py-1 text-xs sm:text-sm"
+                        className="bg-yellow-200 hover:bg-yellow-300 text-yellow-800 font-medium px-2 sm:px-3 py-1 text-xs sm:text-sm"
                         icon={null}
                     >
                         Points {getSortIcon('pointCost')}
@@ -2542,8 +2577,14 @@ const KidTasksList = ({ kid, familyId, allTasks, completedTasks, showConfirmatio
                 return !submittedOrApprovedForThisDueDate;
             }
         }).sort((a, b) => {
-            const dueDateA = a.recurrenceType === 'none' ? (a.customDueDate ? getStartOfDay(new Date(a.customDueDate)).getTime() : 0) : (a.nextDueDate?.toMillis() || 0);
-            const dueDateB = b.recurrenceType === 'none' ? (b.customDueDate ? getStartOfDay(new Date(b.customDueDate)).getTime() : 0) : (b.nextDueDate?.toMillis() || 0);
+            // Effective due date for sorting: customDueDate for 'none', nextDueDate for recurring (fallback to startDate if nextDueDate is null)
+            const getEffectiveDate = (task) => {
+                if (task.recurrenceType === 'none') return task.customDueDate ? getStartOfDay(new Date(task.customDueDate)).getTime() : Infinity;
+                return task.nextDueDate?.toMillis() || (task.startDate ? getStartOfDay(new Date(task.startDate)).getTime() : Infinity);
+            };
+            const dueDateA = getEffectiveDate(a);
+            const dueDateB = getEffectiveDate(b);
+
             return dueDateA - dueDateB;
         });
     }, [allTasks, kid.id, completedTasks, taskViewPeriod, today, todayEnd, weekStart, weekEnd]);
