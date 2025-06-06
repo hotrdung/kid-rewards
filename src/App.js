@@ -634,8 +634,8 @@ function App() {
 
     let viewToRender;
     if (loggedInUser.isSA && !loggedInUser.activeFamilyRole) {
-        console.log("App.js: Rendering SystemAdminDashboard for user:", loggedInUser.uid);
-        viewToRender = <SystemAdminDashboard user={loggedInUser} families={allFamiliesForSA} showConfirmation={showConfirmation} switchToFamilyView={switchToFamilyView} migrateDataToFamilyFunc={migrateDataToFamily} setErrorFunc={setError} />;
+        console.log("App.js: Rendering AdminSection for user:", loggedInUser.uid);
+        viewToRender = <AdminSection user={loggedInUser} families={allFamiliesForSA} showConfirmation={showConfirmation} switchToFamilyView={switchToFamilyView} migrateDataToFamilyFunc={migrateDataToFamily} setErrorFunc={setError} />;
     } else if (loggedInUser.activeFamilyRole?.role === 'parent') {
         console.log("App.js: Rendering ParentDashboard for user:", loggedInUser.uid, "Family:", loggedInUser.activeFamilyRole.familyName);
         viewToRender = <ParentDashboard user={loggedInUser} familyId={loggedInUser.activeFamilyRole.familyId} kids={kids} tasks={tasks} rewards={rewards} completedTasks={completedTasks} redeemedRewardsData={redeemedRewardsData} showConfirmation={showConfirmation} allRewardsGlobal={rewards} switchToAdminViewFunc={switchToAdminView} switchToFamilyViewFunc={switchToFamilyView} />;
@@ -737,8 +737,8 @@ function App() {
     );
 }
 
-// --- System Admin Dashboard ---
-const SystemAdminDashboard = ({ user, families, showConfirmation, switchToFamilyView, migrateDataToFamilyFunc, setErrorFunc }) => {
+// --- Admin Section ---
+const AdminSection = ({ user, families, showConfirmation, switchToFamilyView, migrateDataToFamilyFunc, setErrorFunc }) => {
     const [activeTab, setActiveTab] = useState('manageFamilies');
 
     const adminNavItems = [
@@ -753,8 +753,8 @@ const SystemAdminDashboard = ({ user, families, showConfirmation, switchToFamily
             <Card>
                 <div className="flex flex-col sm:flex-row justify-between items-start">
                     <div>
-                        <h2 className="text-3xl font-semibold text-gray-800 mb-1">System Admin Dashboard</h2>
-                        <p className="text-gray-600 mb-3 sm:mb-0">Manage families and application settings.</p>
+                        <h2 className="text-3xl font-semibold text-gray-800 mb-1">Admin Section</h2>
+                        <p className="text-gray-600 mb-3 sm:mb-0">Manage families and app settings.</p>
                     </div>
                     {parentRoles.length > 0 && (
                         <div className="flex flex-wrap gap-2 mt-3 sm:mt-0 items-center">
@@ -1077,7 +1077,7 @@ const ParentDashboard = ({ user, familyId, kids, tasks, rewards, completedTasks,
                                 className="bg-blue-500 hover:bg-blue-600 text-white text-sm py-1.5 px-3"
                                 icon={UserCog}
                             >
-                                SA Dashboard
+                                Admmin Section
                             </Button>
                             {user.familyRoles
                                 .filter(r => r.role === 'parent' && r.familyId !== user.activeFamilyRole.familyId)
@@ -1504,14 +1504,14 @@ const ManageTasks = ({ familyId, tasksInFamily, kidsInFamily, showConfirmation }
                 <div className="flex flex-wrap items-center gap-1 sm:gap-2">
                     <Button
                         onClick={() => requestSort('startDate')}
-                        className="bg-slate-200 hover:bg-slate-300 text-slate-700 font-medium px-2 sm:px-3 py-1 text-xs sm:text-sm"
+                        className="bg-indigo-500 hover:bg-indigo-600 text-white font-medium px-2 sm:px-3 py-1 text-xs sm:text-sm"
                         icon={null}
                     >
                         Start Date {getSortIcon('startDate')}
                     </Button>
                     <Button
                         onClick={() => requestSort('points')}
-                        className="bg-slate-200 hover:bg-slate-300 text-slate-700 font-medium px-2 sm:px-3 py-1 text-xs sm:text-sm"
+                        className="bg-indigo-500 hover:bg-indigo-600 text-white font-medium px-2 sm:px-3 py-1 text-xs sm:text-sm"
                         icon={null}
                     >
                         Points {getSortIcon('points')}
@@ -1542,8 +1542,10 @@ const ManageTasks = ({ familyId, tasksInFamily, kidsInFamily, showConfirmation }
                             <li key={task.id} className="p-4 bg-gray-50 rounded-lg shadow-sm">
                                 <div className="flex flex-col sm:flex-row justify-between sm:items-start">
                                     <div>
-                                        <span className="font-medium text-lg text-gray-800">{task.name}</span>
-                                        <span className="ml-4 text-sm text-teal-600 font-semibold">{task.points} points</span>
+                                        <p className="font-medium text-lg text-gray-800">{task.name}</p>
+                                        <p className="text-sm text-teal-600 font-semibold">
+                                            {task.points} points
+                                        </p>
                                         <p className="text-xs text-gray-500 mt-1">
                                             Recurrence: <span className="font-medium">{recurrenceDisplay}</span>
                                         </p>
@@ -1608,23 +1610,34 @@ const ManageRewards = ({ familyId, rewardsInFamily, showConfirmation }) => {
     const [rewardName, setRewardName] = useState('');
     const [rewardCost, setRewardCost] = useState('');
     const [formError, setFormError] = useState('');
+    const [editingReward, setEditingReward] = useState(null);
     const [sortConfig, setSortConfig] = useState({ key: 'pointCost', direction: 'descending' });
 
-    const handleAddReward = async () => {
+    const handleSaveOrUpdateReward = async () => {
         setFormError('');
         if (!rewardName.trim() || !rewardCost || isNaN(parseInt(rewardCost)) || parseInt(rewardCost) <= 0) {
             setFormError("Reward name and a positive point cost are required.");
             return;
         }
+        const rewardsPath = getFamilyScopedCollectionPath(familyId, 'rewards');
         try {
-            await addDoc(collection(db, getFamilyScopedCollectionPath(familyId, 'rewards')), {
+            const rewardData = {
                 name: rewardName.trim(),
                 pointCost: parseInt(rewardCost),
-                isAvailable: true,
-                createdAt: Timestamp.now()
-            });
+            };
+
+            if (editingReward) {
+                rewardData.updatedAt = Timestamp.now();
+                rewardData.isAvailable = typeof editingReward.isAvailable === 'boolean' ? editingReward.isAvailable : true;
+                await updateDoc(doc(db, rewardsPath, editingReward.id), rewardData);
+            } else {
+                rewardData.isAvailable = true;
+                rewardData.createdAt = Timestamp.now();
+                await addDoc(collection(db, rewardsPath), rewardData);
+            }
             setRewardName('');
             setRewardCost('');
+            setEditingReward(null);
             setIsModalOpen(false);
         } catch (error) {
             console.error("Error adding reward: ", error);
@@ -1632,6 +1645,21 @@ const ManageRewards = ({ familyId, rewardsInFamily, showConfirmation }) => {
         }
     };
 
+    const openAddModal = () => {
+        setEditingReward(null);
+        setRewardName('');
+        setRewardCost('');
+        setFormError('');
+        setIsModalOpen(true);
+    };
+
+    const openEditModal = (reward) => {
+        setEditingReward(reward);
+        setRewardName(reward.name);
+        setRewardCost(reward.pointCost.toString());
+        setFormError('');
+        setIsModalOpen(true);
+    };
     const [rewardToDelete, setRewardToDelete] = useState(null);
     const confirmDeleteReward = (reward) => {
         setRewardToDelete(reward);
@@ -1692,20 +1720,20 @@ const ManageRewards = ({ familyId, rewardsInFamily, showConfirmation }) => {
                 <div className="flex flex-wrap items-center gap-1 sm:gap-2">
                     <Button
                         onClick={() => requestSort('name')}
-                        className="bg-slate-200 hover:bg-slate-300 text-slate-700 font-medium px-2 sm:px-3 py-1 text-xs sm:text-sm"
+                        className="bg-indigo-500 hover:bg-indigo-600 text-white font-medium px-2 sm:px-3 py-1 text-xs sm:text-sm"
                         icon={null}
                     >
                         Name {getSortIcon('name')}
                     </Button>
                     <Button
                         onClick={() => requestSort('pointCost')}
-                        className="bg-slate-200 hover:bg-slate-300 text-slate-700 font-medium px-2 sm:px-3 py-1 text-xs sm:text-sm"
+                        className="bg-indigo-500 hover:bg-indigo-600 text-white font-medium px-2 sm:px-3 py-1 text-xs sm:text-sm"
                         icon={null}
                     >
                         Points {getSortIcon('pointCost')}
                     </Button>
                     <Button
-                        onClick={() => { setIsModalOpen(true); setFormError(''); }}
+                        onClick={openAddModal}
                         className="bg-yellow-500 hover:bg-yellow-600 text-xs sm:text-sm px-3 py-1.5"
                         icon={PlusCircle}
                     >
@@ -1719,28 +1747,41 @@ const ManageRewards = ({ familyId, rewardsInFamily, showConfirmation }) => {
             ) : (
                 <ul className="space-y-3">
                     {sortedRewards.map(reward => (
-                        <li key={reward.id} className="flex justify-between items-center p-4 bg-gray-50 rounded-lg shadow-sm">
+                        <li key={reward.id} className="flex flex-col sm:flex-row justify-between sm:items-center p-4 bg-gray-50 rounded-lg shadow-sm">
                             <div>
                                 <span className="font-medium text-lg text-gray-800">{reward.name}</span>
                                 <span className="ml-4 text-sm text-yellow-700 font-semibold">{reward.pointCost} points</span>
                             </div>
-                            <Button
-                                onClick={() => confirmDeleteReward(reward)}
-                                className="bg-red-500 hover:bg-red-600 px-3 py-1 text-sm"
-                                icon={Trash2}
-                            >
-                                Delete
-                            </Button>
+                            <div className="flex space-x-2 mt-2 sm:mt-0">
+                                <Button
+                                    onClick={() => openEditModal(reward)}
+                                    className="bg-blue-500 hover:bg-blue-600 px-3 py-1 text-sm"
+                                    icon={Edit3}
+                                >
+                                    Edit
+                                </Button>
+                                <Button
+                                    onClick={() => confirmDeleteReward(reward)}
+                                    className="bg-red-500 hover:bg-red-600 px-3 py-1 text-sm"
+                                    icon={Trash2}
+                                >
+                                    Delete
+                                </Button>
+                            </div>
                         </li>
                     ))}
                 </ul>
             )}
-            <Modal isOpen={isModalOpen} onClose={() => { setIsModalOpen(false); setFormError(''); }} title="Add New Reward">
+            <Modal
+                isOpen={isModalOpen}
+                onClose={() => { setIsModalOpen(false); setFormError(''); setEditingReward(null); }}
+                title={editingReward ? "Edit Reward" : "Add New Reward"}
+            >
                 {formError && <p className="text-red-500 text-sm mb-3">{formError}</p>}
                 <InputField label="Reward Name" value={rewardName} onChange={e => setRewardName(e.target.value)} placeholder="e.g., Extra screen time" required />
                 <InputField label="Point Cost" type="number" value={rewardCost} onChange={e => setRewardCost(e.target.value)} placeholder="e.g., 50" required min="1" />
-                <Button onClick={handleAddReward} className="w-full bg-yellow-500 hover:bg-yellow-600">
-                    Add Reward
+                <Button onClick={handleSaveOrUpdateReward} className="w-full bg-yellow-500 hover:bg-yellow-600">
+                    {editingReward ? "Save Changes" : "Add Reward"}
                 </Button>
             </Modal>
         </Card>
