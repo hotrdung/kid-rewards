@@ -35,6 +35,8 @@ import {
     PackageCheck, PackageX, Eye, UsersRound, ShieldPlus, Building, UserCog, UserPlus, Coins,
     HomeIcon, AlertCircle, Info, MoreHorizontal
 } from 'lucide-react';
+import DatePicker from 'react-datepicker';
+import 'react-datepicker/dist/react-datepicker.css';
 
 // --- Firebase Configuration ---
 const firebaseConfig = typeof __firebase_config !== 'undefined'
@@ -96,53 +98,107 @@ const formatTaskDueDate = (dateInput) => {
     return `${DAYS_SHORT_FORMAT[d.getDay()]} ${MONTHS_SHORT[d.getMonth()]} ${d.getDate().toString().padStart(2, '0')}`;
 };
 
+const dateToYYYYMMDD = (date) => {
+    if (!date || !(date instanceof Date) || isNaN(date.getTime())) return '';
+    return date.toISOString().split('T')[0];
+};
+
+const stringToDateSafe = (dateString) => {
+    if (!dateString) return null;
+    // Try to parse YYYY-MM-DD directly to avoid timezone issues with just new Date(string)
+    const parts = dateString.split('-');
+    if (parts.length === 3) {
+        const year = parseInt(parts[0], 10);
+        const month = parseInt(parts[1], 10) - 1; // Month is 0-indexed
+        const day = parseInt(parts[2], 10);
+        if (!isNaN(year) && !isNaN(month) && !isNaN(day)) {
+            return new Date(year, month, day);
+        }
+    }
+    // Fallback for other formats, though less reliable for consistency
+    const d = new Date(dateString);
+    return isNaN(d.getTime()) ? null : d;
+};
+
+
 const DAYS_OF_WEEK = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
 const DAY_LABELS_SHORT = ["Su", "M", "Tu", "W", "Th", "F", "Sa"];
 const calculateNextDueDate = (task, fromDateInput = new Date()) => {
-    const fromDate = getStartOfDay(new Date(fromDateInput)); if (!task.recurrenceType || task.recurrenceType === 'none') { return task.customDueDate ? Timestamp.fromDate(getStartOfDay(new Date(task.customDueDate))) : null; } let startDate = task.startDate ? getStartOfDay(new Date(task.startDate)) : getStartOfDay(new Date()); let candidateDate = new Date(Math.max(fromDate.getTime(), startDate.getTime())); if (task.nextDueDate && task.nextDueDate.toDate) { const currentNextDue = getStartOfDay(task.nextDueDate.toDate()); if (currentNextDue >= fromDate && currentNextDue >= startDate) { candidateDate = new Date(currentNextDue); } } if (candidateDate < startDate) candidateDate = new Date(startDate); switch (task.recurrenceType) {
-        case 'daily': if (candidateDate <= fromDate) candidateDate.setDate(candidateDate.getDate() + 1); if (candidateDate < startDate) candidateDate = new Date(startDate); break; case 'weekly': if (!task.daysOfWeek || task.daysOfWeek.length === 0) return null; const selectedDayIndexes = task.daysOfWeek.map(day => DAYS_OF_WEEK.indexOf(day)).sort((a, b) => a - b); if (selectedDayIndexes.length === 0) return null; let attempts = 0; const currentDayOfCandidate = candidateDate.getDay(); if (candidateDate <= fromDate && !(selectedDayIndexes.includes(currentDayOfCandidate) && candidateDate.getTime() === fromDate.getTime())) { candidateDate.setDate(candidateDate.getDate() + 1); } if (candidateDate < startDate) candidateDate = new Date(startDate); while (attempts < 14) {
-            const dayOfWeek = candidateDate.getDay(); for (const selectedDay of selectedDayIndexes) {
-                if (selectedDay >= dayOfWeek) {
-                    const potentialDate = new Date(candidateDate); potentialDate.setDate(potentialDate.getDate() + (selectedDay - dayOfWeek)); if (potentialDate >= startDate && potentialDate >= fromDate) { // If fromDate is the completion date, this allows the same day if it's in the future.
-                        // However, when called after completion, fromDate is already advanced by one day.
-                        // So this check should be fine.
-                        return Timestamp.fromDate(getStartOfDay(potentialDate));
+    const fromDate = getStartOfDay(new Date(fromDateInput));
+    // Ensure task.customDueDate and task.startDate are Date objects or parseable strings for new Date()
+    const customDueDateAsDate = task.customDueDate instanceof Date ? task.customDueDate : (task.customDueDate ? stringToDateSafe(task.customDueDate) : null);
+    const startDateAsDate = task.startDate instanceof Date ? task.startDate : (task.startDate ? stringToDateSafe(task.startDate) : getStartOfDay(new Date()));
+
+
+    if (!task.recurrenceType || task.recurrenceType === 'none') {
+        return customDueDateAsDate ? Timestamp.fromDate(getStartOfDay(customDueDateAsDate)) : null;
+    }
+
+    let candidateDate = new Date(Math.max(fromDate.getTime(), startDateAsDate.getTime()));
+
+    if (task.nextDueDate && task.nextDueDate.toDate) {
+        const currentNextDue = getStartOfDay(task.nextDueDate.toDate());
+        if (currentNextDue >= fromDate && currentNextDue >= startDateAsDate) {
+            candidateDate = new Date(currentNextDue);
+        }
+    }
+
+    if (candidateDate < startDateAsDate) candidateDate = new Date(startDateAsDate);
+
+    switch (task.recurrenceType) {
+        case 'daily':
+            if (candidateDate <= fromDate) candidateDate.setDate(candidateDate.getDate() + 1);
+            if (candidateDate < startDateAsDate) candidateDate = new Date(startDateAsDate);
+            break;
+        case 'weekly':
+            if (!task.daysOfWeek || task.daysOfWeek.length === 0) return null;
+            const selectedDayIndexes = task.daysOfWeek.map(day => DAYS_OF_WEEK.indexOf(day)).sort((a, b) => a - b);
+            if (selectedDayIndexes.length === 0) return null;
+            let attempts = 0;
+            const currentDayOfCandidate = candidateDate.getDay();
+            if (candidateDate <= fromDate && !(selectedDayIndexes.includes(currentDayOfCandidate) && candidateDate.getTime() === fromDate.getTime())) {
+                candidateDate.setDate(candidateDate.getDate() + 1);
+            }
+            if (candidateDate < startDateAsDate) candidateDate = new Date(startDateAsDate);
+            while (attempts < 14) {
+                const dayOfWeek = candidateDate.getDay();
+                for (const selectedDay of selectedDayIndexes) {
+                    if (selectedDay >= dayOfWeek) {
+                        const potentialDate = new Date(candidateDate);
+                        potentialDate.setDate(potentialDate.getDate() + (selectedDay - dayOfWeek));
+                        if (potentialDate >= startDateAsDate && potentialDate >= fromDate) {
+                            return Timestamp.fromDate(getStartOfDay(potentialDate));
+                        }
                     }
                 }
-            } candidateDate.setDate(candidateDate.getDate() + (7 - dayOfWeek)); if (candidateDate < startDate) candidateDate = new Date(startDate); attempts++;
-        } return null;
+                candidateDate.setDate(candidateDate.getDate() + (7 - dayOfWeek));
+                if (candidateDate < startDateAsDate) candidateDate = new Date(startDateAsDate);
+                attempts++;
+            }
+            return null;
         case 'monthly':
-            const targetDayOfMonth = new Date(task.startDate).getDate();
-            let monthCandidate = new Date(Math.max(fromDate.getTime(), startDate.getTime()));
-
-            // If the monthCandidate's current day is past the target day for its current month, advance to the next month.
-            // This is simplified because `fromDate` (when called from task completion) is already the day *after* the completed due date.
+            const targetDayOfMonth = startDateAsDate.getDate(); // Use the day from the (potentially Date object) startDateAsDate
+            let monthCandidate = new Date(Math.max(fromDate.getTime(), startDateAsDate.getTime()));
             if (monthCandidate.getDate() > targetDayOfMonth) {
                 monthCandidate.setMonth(monthCandidate.getMonth() + 1);
             }
             monthCandidate.setDate(targetDayOfMonth);
-
-            // Ensure the date is valid (e.g., Feb 30 becomes Mar 2) and is the target day.
-            // Also ensure it's >= fromDate and >= startDate.
-            // The loop handles advancing months if the setDate resulted in an earlier date than fromDate/startDate
-            // or if the day of the month is incorrect due to month rollover (e.g. setting 31st for April).
-            while (monthCandidate.getDate() !== targetDayOfMonth || monthCandidate < startDate || monthCandidate < fromDate) {
+            while (monthCandidate.getDate() !== targetDayOfMonth || monthCandidate < startDateAsDate || monthCandidate < fromDate) {
                 monthCandidate.setMonth(monthCandidate.getMonth() + 1);
-                monthCandidate.setDate(targetDayOfMonth); // Try setting the day in the new month
-                // Re-check if day is still wrong (e.g. for Feb, if targetDayOfMonth > 28/29)
+                monthCandidate.setDate(targetDayOfMonth);
                 if (monthCandidate.getDate() !== targetDayOfMonth) {
-                    // This happens if targetDayOfMonth is, e.g., 31 and current month is April.
-                    // monthCandidate would become May 1st after setDate(31) on April.
-                    // We need to correct it to be targetDayOfMonth of the *correct* month.
-                    monthCandidate.setDate(0); // last day of previous month (e.g. April 30th)
-                    monthCandidate.setMonth(monthCandidate.getMonth() + 1); // go to correct month (e.g. May)
-                    monthCandidate.setDate(targetDayOfMonth); // set the target day (e.g. May 31st, if target was 31)
+                    monthCandidate.setDate(0);
+                    monthCandidate.setMonth(monthCandidate.getMonth() + 1);
+                    monthCandidate.setDate(targetDayOfMonth);
                 }
             }
             candidateDate = monthCandidate;
-            break; default: return null;
-    } return Timestamp.fromDate(getStartOfDay(candidateDate));
+            break;
+        default: return null;
+    }
+    return Timestamp.fromDate(getStartOfDay(candidateDate));
 };
+
 
 // --- Helper Components ---
 const Modal = ({ isOpen, onClose, title, children, size = "max-w-md" }) => {
@@ -208,6 +264,29 @@ const InputField = ({ label, type = 'text', value, onChange, placeholder, requir
         />
     </div>
 );
+
+const CustomDatePickerField = ({ label, selectedDate, onChange, name, dateFormat = "dd/MM/yyyy", placeholderText, required = false, minDate, maxDate }) => {
+    return (
+        <div className="mb-4">
+            <label className="block text-sm font-medium text-gray-700 mb-1">{label}{required && <span className="text-red-500">*</span>}</label>
+            <DatePicker
+                selected={selectedDate} // Expects a Date object or null
+                onChange={(date) => {
+                    onChange({ target: { name: name, value: date } }); // Pass Date object directly
+                }}
+                dateFormat={dateFormat}
+                placeholderText={placeholderText || dateFormat.toLowerCase()}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"
+                autoComplete="off"
+                showPopperArrow={false}
+                minDate={minDate}
+                maxDate={maxDate}
+                required={required}
+            />
+        </div>
+    );
+};
+
 
 const SelectField = ({ label, value, onChange, options, placeholder, name, required = false }) => (
     <div className="mb-4">
@@ -1088,20 +1167,17 @@ const ManageFamilyParents = ({ families, showConfirmation, currentUser }) => {
 
 // --- Parent Dashboard ---
 const ParentDashboard = ({ user, familyId, kids, tasks, rewards, completedTasks, redeemedRewardsData, showConfirmation, allRewardsGlobal, switchToAdminViewFunc, switchToFamilyViewFunc }) => {
-    const [activeTab, setActiveTab] = useState('tasks');
-    const [showMoreNav, setShowMoreNav] = useState(false);
-    const moreNavContainerRef = useRef(null);
+    const [activeTab, setActiveTab] = useState('tasks'); // Default to tasks tab
 
     const pendingTasks = completedTasks.filter(task => task.status === 'pending_approval');
     const pendingFulfillmentRewards = redeemedRewardsData.filter(reward => reward.status === 'pending_fulfillment');
 
-    const mainNavItems = [
+    // Combine all navigation items into one array
+    const allNavItems = [
+        { name: 'kids', icon: Users, label: "Kids" },
         { name: 'tasks', icon: ClipboardList, label: "Tasks" },
         { name: 'rewards', icon: Trophy, label: "Rewards" },
         { name: 'approveTasks', icon: Bell, label: "Approvals", count: pendingTasks.length },
-    ];
-    const moreNavItems = [
-        { name: 'kids', icon: Users, label: "Kids" },
         { name: 'fulfillRewards', icon: PackageCheck, label: "Fulfill Rewards", count: pendingFulfillmentRewards.length },
         { name: 'history', icon: ListChecks, label: "History" },
     ];
@@ -1109,16 +1185,7 @@ const ParentDashboard = ({ user, familyId, kids, tasks, rewards, completedTasks,
     const handleTabClick = (tabName, isFromMoreMenu = false) => {
         setActiveTab(tabName);
         if (isFromMoreMenu) {
-            setShowMoreNav(false);
-        }
-    };
-
-    const handleMoreNavBlur = (event) => {
-        // event.relatedTarget is the element receiving focus.
-        // moreNavContainerRef.current is the div containing the "More" button and its dropdown.
-        // If relatedTarget is null (e.g., clicked on non-focusable area) or not inside the container, close the menu.
-        if (moreNavContainerRef.current && !moreNavContainerRef.current.contains(event.relatedTarget)) {
-            setShowMoreNav(false);
+            // setShowMoreNav(false); // This state is removed for now
         }
     };
 
@@ -1172,47 +1239,19 @@ const ParentDashboard = ({ user, familyId, kids, tasks, rewards, completedTasks,
             </Card>
             <nav className="bg-white shadow rounded-lg p-2">
                 <div className="flex flex-wrap gap-1 sm:gap-2">
-                    {mainNavItems.map(item => (
+                    {allNavItems.map(item => (
                         <div key={item.name} className="flex-1 min-w-[80px] sm:min-w-0">
                             <NavItemButton
                                 tabName={item.name}
                                 icon={item.icon}
                                 label={item.label}
                                 count={item.count}
-                                currentActiveTab={activeTab}
-                                onTabClick={handleTabClick}
+                                currentActiveTab={activeTab} // Pass activeTab
+                                onTabClick={handleTabClick} // Pass handleTabClick
+                                // isMoreItem is no longer needed here as we're not using a separate "More" menu for desktop
                             />
                         </div>
                     ))}
-                    <div
-                        ref={moreNavContainerRef}
-                        onBlur={handleMoreNavBlur}
-                        className="relative flex-1 min-w-[80px] sm:min-w-0"
-                    >
-                        <button
-                            onClick={() => setShowMoreNav(!showMoreNav)}
-                            className={`flex items-center w-full text-left px-3 py-2 rounded-lg transition-colors duration-150 text-sm text-gray-600 hover:bg-purple-100 ${showMoreNav ? 'bg-purple-100' : ''}`}
-                        >
-                            <MoreHorizontal size={18} className="mr-2 flex-shrink-0" />
-                            <span className="flex-grow">More</span>
-                        </button>
-                        {showMoreNav && (
-                            <div className="absolute right-0 sm:left-0 mt-2 w-48 bg-white border border-gray-200 rounded-md shadow-lg z-10 py-1">
-                                {moreNavItems.map(item => (
-                                    <NavItemButton
-                                        key={item.name}
-                                        tabName={item.name}
-                                        icon={item.icon}
-                                        label={item.label}
-                                        count={item.count}
-                                        currentActiveTab={activeTab}
-                                        onTabClick={(tabName) => handleTabClick(tabName, true)}
-                                        isMoreItem={true}
-                                    />
-                                ))}
-                            </div>
-                        )}
-                    </div>
                 </div>
             </nav>
             <div>{renderContent()}</div>
@@ -1426,12 +1465,12 @@ const ManageTasks = ({ familyId, tasksInFamily, kidsInFamily, showConfirmation }
     const [sortConfig, setSortConfig] = useState({ key: 'effectiveDate', direction: 'ascending' });
 
     const initialFormState = {
-        name: '', 
-        points: '1', 
-        recurrenceType: 'none', 
+        name: '',
+        points: '1',
+        recurrenceType: 'none',
         daysOfWeek: [],
-        startDate: new Date().toISOString().split('T')[0], 
-        customDueDate: new Date().toISOString().split('T')[0], // Default customDueDate to today initially
+        startDate: new Date(), // Store as Date object
+        customDueDate: new Date(), // Store as Date object
         assignedKidId: ''
     };
     const [formData, setFormData] = useState(initialFormState);
@@ -1442,35 +1481,37 @@ const ManageTasks = ({ familyId, tasksInFamily, kidsInFamily, showConfirmation }
         { value: 'monthly', label: 'Monthly (based on start date)' }
     ];
     const kidOptions = [
-        ...kidsInFamily.map(k => ({ value: k.id, label: k.name })) // Removed the explicit unassigned option here
+        ...kidsInFamily.map(k => ({ value: k.id, label: k.name }))
     ];
 
     const handleInputChange = (e) => {
         const { name, value } = e.target;
         setFormData(prev => {
-            const newState = { ...prev, [name]: value };
+            let newState = { ...prev, [name]: value };
+
+            // Ensure dates from DatePicker are Date objects
+            if ((name === "startDate" || name === "customDueDate") && !(value instanceof Date) && value !== null) {
+                newState[name] = stringToDateSafe(value.toString()); // Convert if not already a Date (e.g. from manual input if allowed)
+            }
+
+
             // Scenario 1: Start Date changes AND recurrence is already weekly
-            if (name === "startDate" && newState.recurrenceType === "weekly") {
-                const newStartDateDay = DAYS_OF_WEEK[new Date(value + 'T00:00:00').getDay()];
+            if (name === "startDate" && newState.recurrenceType === "weekly" && newState.startDate instanceof Date) {
+                const newStartDateDay = DAYS_OF_WEEK[newState.startDate.getDay()];
                 if (newStartDateDay && !newState.daysOfWeek.includes(newStartDateDay)) {
                     newState.daysOfWeek = [...newState.daysOfWeek, newStartDateDay];
                 }
             }
             // Scenario 1.b: Start Date changes, and it's a non-recurring task.
-            // Auto-set customDueDate if it's empty or before the new startDate.
-            // Or if customDueDate is not set to something validly after/on the new startDate
-            if (name === "startDate" && newState.recurrenceType === "none") {
-                // Always set customDueDate to the new startDate if startDate changes for a non-recurring task
-                // unless customDueDate is already explicitly set by the user to be later.
-                if (!newState.customDueDate || new Date(newState.customDueDate) < new Date(value) || newState.customDueDate === prev.customDueDate) {
-                    newState.customDueDate = value;
+            if (name === "startDate" && newState.recurrenceType === "none" && newState.startDate instanceof Date) {
+                if (!newState.customDueDate || newState.customDueDate < newState.startDate) {
+                    newState.customDueDate = new Date(newState.startDate);
                 }
             }
             // Scenario 2: Recurrence type changes TO weekly
-            if (name === "recurrenceType" && value === "weekly" && newState.startDate) {
-                const currentStartDateDay = DAYS_OF_WEEK[new Date(newState.startDate + 'T00:00:00').getDay()];
+            if (name === "recurrenceType" && value === "weekly" && newState.startDate instanceof Date) {
+                const currentStartDateDay = DAYS_OF_WEEK[newState.startDate.getDay()];
                 if (currentStartDateDay && !newState.daysOfWeek.includes(currentStartDateDay)) {
-                    // If daysOfWeek is empty or doesn't include the start date's day, add it.
                     newState.daysOfWeek = [...newState.daysOfWeek, currentStartDateDay];
                 }
             }
@@ -1478,12 +1519,11 @@ const ManageTasks = ({ familyId, tasksInFamily, kidsInFamily, showConfirmation }
                 newState.daysOfWeek = [];
             }
             // Scenario 3: Recurrence type changes TO "none".
-            // If customDueDate is empty or before startDate, set it to startDate.
-            if (name === "recurrenceType" && value === "none" && newState.startDate) {
-                if (!newState.customDueDate || new Date(newState.customDueDate) < new Date(newState.startDate)) {
-                    newState.customDueDate = newState.startDate;
+            if (name === "recurrenceType" && value === "none" && newState.startDate instanceof Date) {
+                if (!newState.customDueDate || newState.customDueDate < newState.startDate) {
+                    newState.customDueDate = new Date(newState.startDate);
                 }
-                newState.daysOfWeek = [];
+                // No need to clear daysOfWeek here again, it's covered above
             }
             return newState;
         });
@@ -1498,24 +1538,34 @@ const ManageTasks = ({ familyId, tasksInFamily, kidsInFamily, showConfirmation }
 
     const openAddModal = () => {
         setEditingTask(null);
-        const todayDateString = new Date().toISOString().split('T')[0];
-        setFormData({ 
-            ...initialFormState, 
-            startDate: todayDateString, 
-            customDueDate: todayDateString }); // Ensure customDueDate also defaults to today for new tasks
+        const todayDate = new Date();
+        setFormData({
+            ...initialFormState,
+            startDate: todayDate,
+            customDueDate: todayDate
+        });
         setFormError('');
         setIsModalOpen(true);
     };
 
     const openEditModal = (task) => {
         setEditingTask(task);
+        const taskStartDate = task.startDate ? stringToDateSafe(task.startDate) : new Date();
+        let taskCustomDueDate = task.customDueDate ? stringToDateSafe(task.customDueDate) : null;
+        if (task.recurrenceType === 'none' && !taskCustomDueDate) {
+            taskCustomDueDate = new Date(taskStartDate); // Default to start date if none and custom is missing
+        } else if (task.recurrenceType === 'none' && taskCustomDueDate && taskStartDate && taskCustomDueDate < taskStartDate) {
+            taskCustomDueDate = new Date(taskStartDate); // Ensure due date is not before start date
+        }
+
+
         setFormData({
             name: task.name,
             points: task.points.toString(),
             recurrenceType: task.recurrenceType || 'none',
             daysOfWeek: task.daysOfWeek || [],
-            startDate: task.startDate ? new Date(task.startDate + 'T00:00:00').toISOString().split('T')[0] : new Date().toISOString().split('T')[0],
-            customDueDate: task.customDueDate ? new Date(task.customDueDate + 'T00:00:00').toISOString().split('T')[0] : '',
+            startDate: taskStartDate,
+            customDueDate: taskCustomDueDate,
             assignedKidId: task.assignedKidId || '',
         });
         setFormError('');
@@ -1533,33 +1583,43 @@ const ManageTasks = ({ familyId, tasksInFamily, kidsInFamily, showConfirmation }
         if (formData.recurrenceType === 'none' && !formData.customDueDate) {
             setFormError('For non-recurring tasks, a specific Due Date is required.'); return;
         }
-        if (formData.customDueDate && new Date(formData.customDueDate) < new Date(formData.startDate)) {
+        if (formData.customDueDate && formData.startDate && formData.customDueDate < formData.startDate) {
             setFormError('Due date cannot be before start date.'); return;
         }
         setFormError('');
 
-        const taskData = {
+        const taskDataForFirestore = {
             name: formData.name.trim(),
             points: parseInt(formData.points),
             recurrenceType: formData.recurrenceType,
             daysOfWeek: formData.recurrenceType === 'weekly' ? formData.daysOfWeek : [],
-            startDate: formData.startDate,
-            customDueDate: formData.recurrenceType === 'none' && formData.customDueDate ? formData.customDueDate : null,
+            startDate: dateToYYYYMMDD(formData.startDate),
+            customDueDate: formData.recurrenceType === 'none' && formData.customDueDate ? dateToYYYYMMDD(formData.customDueDate) : null,
             assignedKidId: formData.assignedKidId || null,
             isActive: true,
         };
-        const baseDateForCalc = taskData.recurrenceType === 'none'
-            ? new Date(taskData.customDueDate + 'T00:00:00') // Ensure it's a Date object
-            : new Date(taskData.startDate + 'T00:00:00'); // Ensure it's a Date object
-        taskData.nextDueDate = calculateNextDueDate({ ...taskData }, baseDateForCalc);
+
+        // For calculateNextDueDate, use Date objects from formData
+        const taskForCalc = {
+            ...taskDataForFirestore, // Start with string dates for consistency with how calcNextDueDate might parse
+            startDate: formData.startDate, // but override with actual Date objects for calculation
+            customDueDate: formData.customDueDate,
+        };
+        
+        const baseDateForCalc = taskForCalc.recurrenceType === 'none'
+            ? taskForCalc.customDueDate // This is a Date object
+            : taskForCalc.startDate;   // This is a Date object
+
+        taskDataForFirestore.nextDueDate = calculateNextDueDate(taskForCalc, baseDateForCalc);
+
 
         try {
             const tasksPath = getFamilyScopedCollectionPath(familyId, 'tasks');
             if (editingTask) {
-                await updateDoc(doc(db, tasksPath, editingTask.id), taskData);
+                await updateDoc(doc(db, tasksPath, editingTask.id), taskDataForFirestore);
             } else {
-                taskData.createdAt = Timestamp.now();
-                await addDoc(collection(db, tasksPath), taskData);
+                taskDataForFirestore.createdAt = Timestamp.now();
+                await addDoc(collection(db, tasksPath), taskDataForFirestore);
             }
             setIsModalOpen(false);
         } catch (error) {
@@ -1593,22 +1653,20 @@ const ManageTasks = ({ familyId, tasksInFamily, kidsInFamily, showConfirmation }
         if (sortConfig.key !== null) {
             sortableItems.forEach(task => {
                 if (task.recurrenceType === 'none') {
-                    task.effectiveDate = task.customDueDate ? getStartOfDay(new Date(task.customDueDate)).getTime() : 0;
+                    task.effectiveDate = task.customDueDate ? getStartOfDay(stringToDateSafe(task.customDueDate)).getTime() : 0;
                 } else {
-                    task.effectiveDate = task.nextDueDate?.toMillis() || (task.startDate ? getStartOfDay(new Date(task.startDate)).getTime() : 0);
+                    task.effectiveDate = task.nextDueDate?.toMillis() || (task.startDate ? getStartOfDay(stringToDateSafe(task.startDate)).getTime() : 0);
                 }
             });
 
-            sortableItems.sort((a,b) => {
+            sortableItems.sort((a, b) => {
                 let valA = a[sortConfig.key];
                 let valB = b[sortConfig.key];
 
-                // If sorting by points, convert to number for correct comparison
                 if (sortConfig.key === 'points') {
                     valA = Number(valA);
                     valB = Number(valB);
                 }
-                // For effectiveDate, it's already a timestamp
                 if (valA < valB) return sortConfig.direction === 'ascending' ? -1 : 1;
                 if (valA > valB) return sortConfig.direction === 'ascending' ? 1 : -1;
                 return 0;
@@ -1635,7 +1693,6 @@ const ManageTasks = ({ familyId, tasksInFamily, kidsInFamily, showConfirmation }
             <div className="flex flex-col sm:flex-row justify-between items-center mb-6 gap-2">
                 <h3 className="text-2xl font-semibold text-gray-700">Tasks</h3>
                 <div className="flex flex-wrap items-center gap-1 sm:gap-2">
-                     {/* Changed default sort to 'effectiveDate' which considers nextDueDate or customDueDate */}
                     <Button
                         onClick={() => requestSort('effectiveDate')}
                         className="bg-yellow-200 hover:bg-yellow-300 text-yellow-800 font-medium px-2 sm:px-3 py-1 text-xs sm:text-sm"
@@ -1675,7 +1732,7 @@ const ManageTasks = ({ familyId, tasksInFamily, kidsInFamily, showConfirmation }
                         }
 
                         const taskSpecificDueDate = task.recurrenceType === 'none'
-                            ? (task.customDueDate ? getStartOfDay(new Date(task.customDueDate)) : null)
+                            ? (task.customDueDate ? getStartOfDay(stringToDateSafe(task.customDueDate)) : null)
                             : (task.nextDueDate?.toDate ? getStartOfDay(task.nextDueDate.toDate()) : null);
 
                         let dueDateDisplayContent;
@@ -1698,7 +1755,7 @@ const ManageTasks = ({ familyId, tasksInFamily, kidsInFamily, showConfirmation }
                                 dueDateDisplayContent = formatTaskDueDate(taskSpecificDueDate);
                             }
                         } else {
-                            dueDateDisplayContent = `Starts: ${formatShortDate(task.startDate ? new Date(task.startDate + 'T00:00:00') : null)}`;
+                            dueDateDisplayContent = `Starts: ${formatShortDate(task.startDate ? stringToDateSafe(task.startDate) : null)}`;
                         }
 
                         return (
@@ -1757,13 +1814,26 @@ const ManageTasks = ({ familyId, tasksInFamily, kidsInFamily, showConfirmation }
                         <Button onClick={() => handlePointChange(1)} icon={ArrowUpCircle} className="bg-green-400 hover:bg-green-500 px-2 py-1 text-sm" />
                     </div>
                 </div>
-                <InputField label="Start Date" name="startDate" type="date" value={formData.startDate} onChange={handleInputChange} required />
+                <CustomDatePickerField
+                    label="Start Date"
+                    name="startDate"
+                    selectedDate={formData.startDate}
+                    onChange={handleInputChange}
+                    required
+                />
                 <SelectField label="Recurrence" name="recurrenceType" value={formData.recurrenceType} onChange={handleInputChange} options={recurrenceOptions} />
                 {formData.recurrenceType === 'weekly' && (
                     <DayOfWeekSelector selectedDays={formData.daysOfWeek} onChange={handleInputChange} />
                 )}
                 {formData.recurrenceType === 'none' && (
-                    <InputField label="Specific Due Date (for Non-Recurring)" name="customDueDate" type="date" value={formData.customDueDate} onChange={handleInputChange} />
+                    <CustomDatePickerField
+                        label="Specific Due Date (for Non-Recurring)"
+                        name="customDueDate"
+                        selectedDate={formData.customDueDate}
+                        onChange={handleInputChange}
+                        minDate={formData.startDate} // Prevent due date before start date
+                        required
+                    />
                 )}
                 <SelectField label="Assign to Kid" name="assignedKidId" value={formData.assignedKidId} onChange={handleInputChange} options={kidOptions} placeholder="Unassigned (Any Kid)" />
                 <Button onClick={handleSaveTask} className="w-full mt-4 bg-teal-500 hover:bg-teal-600">
@@ -2038,14 +2108,18 @@ const ApproveTasks = ({ familyId, pendingTasks, kidsInFamily, allTasksInFamily, 
                 const dayAfterCompletedTaskDueDate = new Date(completedTaskDueDate);
                 dayAfterCompletedTaskDueDate.setDate(dayAfterCompletedTaskDueDate.getDate() + 1);
 
+                const taskForCalc = { // Prepare task object with Date types for calculateNextDueDate
+                    ...mainTaskData,
+                    startDate: stringToDateSafe(mainTaskData.startDate),
+                    customDueDate: mainTaskData.customDueDate ? stringToDateSafe(mainTaskData.customDueDate) : null,
+                    // nextDueDate from currentTaskForApproval is already a Timestamp, toDate() will make it a Date
+                    nextDueDate: currentTaskForApproval.taskDueDate 
+                };
+
+
                 const newNextDueDate = calculateNextDueDate(
-                    {
-                        ...mainTaskData,
-                        startDate: new Date(mainTaskData.startDate), // ensure Date object
-                        customDueDate: mainTaskData.customDueDate ? new Date(mainTaskData.customDueDate) : null,
-                        nextDueDate: currentTaskForApproval.taskDueDate // Pass current task's nextDueDate as part of task object for reference if needed by calc function
-                    },
-                    dayAfterCompletedTaskDueDate // Base calculation for *next* due date starts from day after completion
+                    taskForCalc,
+                    dayAfterCompletedTaskDueDate
                 );
                 if (newNextDueDate) {
                     batch.update(mainTaskRef, { nextDueDate: newNextDueDate });
@@ -2573,18 +2647,18 @@ const KidTasksList = ({ kid, familyId, allTasks, completedTasks, showConfirmatio
                 return false;
             }
 
-            const taskStartDate = task.startDate ? getStartOfDay(new Date(task.startDate)) : today;
+            const taskStartDate = task.startDate ? getStartOfDay(stringToDateSafe(task.startDate)) : today;
             if (today < taskStartDate) return false; // Task hasn't started yet
 
             if (task.recurrenceType === 'none') {
-                const customDueDate = task.customDueDate ? getEndOfDay(new Date(task.customDueDate)) : null;
+                const customDueDate = task.customDueDate ? getEndOfDay(stringToDateSafe(task.customDueDate)) : null;
                 if (!customDueDate) return false; // No due date for one-time task
 
                 const completedOrPendingForThisDueDate = completedTasks.find(ct =>
                     ct.taskId === task.id &&
                     ct.kidId === kid.id &&
                     (ct.status === 'approved' || ct.status === 'pending_approval') &&
-                    ct.taskDueDate?.toDate().getTime() === getStartOfDay(new Date(task.customDueDate)).getTime()
+                    ct.taskDueDate?.toDate().getTime() === getStartOfDay(stringToDateSafe(task.customDueDate)).getTime()
                 );
 
                 const isOverdue = customDueDate < today;
@@ -2605,7 +2679,7 @@ const KidTasksList = ({ kid, familyId, allTasks, completedTasks, showConfirmatio
 
                 // For "Today's Tasks" view, also consider if the task's startDate is today,
                 // especially for recurring tasks that might have a nextDueDate further out but should appear if they start today.
-                const startsToday = task.startDate ? getStartOfDay(new Date(task.startDate)).getTime() === today.getTime() : false;
+                const startsToday = task.startDate ? getStartOfDay(stringToDateSafe(task.startDate)).getTime() === today.getTime() : false;
 
                 // Check if the next due date falls within the selected period OR is overdue OR is due today (or starts today for 'today' view)
                 const isRelevantToPeriod = (taskViewPeriod === 'today' && (isDueToday || startsToday)) ||
@@ -2625,8 +2699,8 @@ const KidTasksList = ({ kid, familyId, allTasks, completedTasks, showConfirmatio
         }).sort((a, b) => {
             // Effective due date for sorting: customDueDate for 'none', nextDueDate for recurring (fallback to startDate if nextDueDate is null)
             const getEffectiveDate = (task) => {
-                if (task.recurrenceType === 'none') return task.customDueDate ? getStartOfDay(new Date(task.customDueDate)).getTime() : Infinity;
-                return task.nextDueDate?.toMillis() || (task.startDate ? getStartOfDay(new Date(task.startDate)).getTime() : Infinity);
+                if (task.recurrenceType === 'none') return task.customDueDate ? getStartOfDay(stringToDateSafe(task.customDueDate)).getTime() : Infinity;
+                return task.nextDueDate?.toMillis() || (task.startDate ? getStartOfDay(stringToDateSafe(task.startDate)).getTime() : Infinity);
             };
             const dueDateA = getEffectiveDate(a);
             const dueDateB = getEffectiveDate(b);
@@ -2639,7 +2713,7 @@ const KidTasksList = ({ kid, familyId, allTasks, completedTasks, showConfirmatio
     const handleCompleteTask = async (task) => {
         // Determine the correct due date for this completion instance
         const taskDueDateForCompletion = task.recurrenceType === 'none'
-            ? (task.customDueDate ? Timestamp.fromDate(getStartOfDay(new Date(task.customDueDate))) : Timestamp.fromDate(today))
+            ? (task.customDueDate ? Timestamp.fromDate(getStartOfDay(stringToDateSafe(task.customDueDate))) : Timestamp.fromDate(today))
             : task.nextDueDate; // For recurring, this should be the specific instance they are completing
 
         if (!taskDueDateForCompletion) {
@@ -2744,7 +2818,7 @@ const KidTasksList = ({ kid, familyId, allTasks, completedTasks, showConfirmatio
                     {tasksToShow.map(task => {
                         // For display, use the relevant due date
                         const taskSpecificDueDate = task.recurrenceType === 'none'
-                            ? (task.customDueDate ? getStartOfDay(new Date(task.customDueDate)) : null)
+                            ? (task.customDueDate ? getStartOfDay(stringToDateSafe(task.customDueDate)) : null)
                             : (task.nextDueDate?.toDate ? getStartOfDay(task.nextDueDate.toDate()) : null);
 
                         // Find if there's a pending submission for THIS specific task instance's due date
