@@ -875,11 +875,11 @@ const ManageFamilies = ({ families, showConfirmation, currentUser }) => {
                 <div className="flex flex-wrap items-center gap-1 sm:gap-2">
                     <Button
                         onClick={openAddModal}
-                        className="bg-green-500 hover:bg-green-600 text-xs sm:text-sm px-3 py-1.5"
+                        className="bg-green-500 hover:bg-green-600 text-xs sm:text-sm px-2 sm:px-3 py-1.5"
                         icon={PlusCircle}
+                        title="Add Family"
                     >
                         <span className="hidden sm:inline">Add Family</span>
-                        <span className="sm:hidden">+</span>
                     </Button>
                 </div>
             </div>
@@ -898,18 +898,18 @@ const ManageFamilies = ({ families, showConfirmation, currentUser }) => {
                                 <Button
                                     onClick={() => openEditModal(fam)}
                                     icon={Edit3}
-                                    className="bg-blue-500 hover:bg-blue-600 px-3 py-1 text-sm"
+                                    className="bg-blue-500 hover:bg-blue-600 px-2 sm:px-3 py-1 text-sm"
                                     title="Edit Family"
                                 >
-                                    <span className="hidden sm:inline ml-1">Edit</span>
+                                    <span className="hidden sm:inline">Edit</span>
                                 </Button>
                                 <Button
                                     onClick={() => confirmDeleteFamily(fam)}
                                     icon={Trash2}
-                                    className="bg-red-500 hover:bg-red-600 px-3 py-1 text-sm"
+                                    className="bg-red-500 hover:bg-red-600 px-2 sm:px-3 py-1 text-sm"
                                     title="Delete Family"
                                 >
-                                    <span className="hidden sm:inline ml-1">Delete</span>
+                                    <span className="hidden sm:inline">Delete</span>
                                 </Button>
                             </div>
                         </li>
@@ -1002,11 +1002,12 @@ const ManageFamilyParents = ({ families, showConfirmation, currentUser }) => {
             />
             <Button
                 onClick={handleAddParentToFamily}
-                className="bg-blue-500 hover:bg-blue-600"
+                className="bg-blue-500 hover:bg-blue-600 px-2 sm:px-4 py-2" // Adjusted padding from default
                 icon={UserPlus}
                 disabled={!selectedFamilyId || !parentEmailToAdd}
+                title="Add Parent"
             >
-                Add Parent
+                <span className="hidden sm:inline">Add Parent</span>
             </Button>
             {selectedFamilyId && (
                 <div className="mt-6">
@@ -1271,10 +1272,10 @@ const ManageKids = ({ parentUser, familyId, kidsInFamily, completedTasks, showCo
                 </h3>
                 <Button
                     onClick={openAddModal}
-                    className="bg-green-500 hover:bg-green-600 text-sm px-3 py-1.5"
+                    className="bg-green-500 hover:bg-green-600 text-sm px-2 sm:px-3 py-1.5"
                     icon={PlusCircle}
+                    title="Add Kid"
                 >
-                    <span className="sm:hidden">+</span>
                     <span className="hidden sm:inline">Add Kid</span>
                 </Button>
             </div>
@@ -1308,11 +1309,20 @@ const ManageKids = ({ parentUser, familyId, kidsInFamily, completedTasks, showCo
                                     {kid.authUid && <p className="text-xs text-gray-400 mt-1">Linked</p>}
                                 </div>
                                 <div className="flex space-x-2 mt-2 sm:mt-0">
-                                    <Button onClick={() => openEditModal(kid)} className="bg-blue-500 hover:bg-blue-600 px-3 py-1 text-sm" icon={Edit3}>
-                                        Edit
+                                    <Button
+                                        onClick={() => openEditModal(kid)}
+                                        className="bg-blue-500 hover:bg-blue-600 px-2 sm:px-3 py-1 text-sm"
+                                        icon={Edit3}
+                                        title="Edit Kid"
+                                    >
+                                        <span className="hidden sm:inline">Edit</span>
                                     </Button>
-                                    <Button onClick={() => confirmDeleteKid(kid)} className="bg-red-500 hover:bg-red-600 px-3 py-1 text-sm" icon={Trash2}>
-                                        Delete
+                                    <Button
+                                        onClick={() => confirmDeleteKid(kid)} className="bg-red-500 hover:bg-red-600 px-2 sm:px-3 py-1 text-sm"
+                                        icon={Trash2}
+                                        title="Delete Kid"
+                                    >
+                                        <span className="hidden sm:inline">Delete</span>
                                     </Button>
                                 </div>
                             </li>
@@ -1518,24 +1528,24 @@ const ManageTasks = ({ familyId, tasksInFamily, kidsInFamily, showConfirmation }
                 <div className="flex flex-wrap items-center gap-1 sm:gap-2">
                     <Button
                         onClick={() => requestSort('startDate')}
-                        className="bg-indigo-500 hover:bg-indigo-600 text-white font-medium px-2 sm:px-3 py-1 text-xs sm:text-sm"
+                        className="bg-slate-200 hover:bg-slate-300 text-slate-700 font-medium px-2 sm:px-3 py-1 text-xs sm:text-sm"
                         icon={null}
                     >
                         Start Date {getSortIcon('startDate')}
                     </Button>
                     <Button
                         onClick={() => requestSort('points')}
-                        className="bg-indigo-500 hover:bg-indigo-600 text-white font-medium px-2 sm:px-3 py-1 text-xs sm:text-sm"
+                        className="bg-slate-200 hover:bg-slate-300 text-slate-700 font-medium px-2 sm:px-3 py-1 text-xs sm:text-sm"
                         icon={null}
                     >
                         Points {getSortIcon('points')}
                     </Button>
                     <Button
                         onClick={openAddModal}
-                        className="bg-teal-500 hover:bg-teal-600 text-xs sm:text-sm px-3 py-1.5"
+                        className="bg-teal-500 hover:bg-teal-600 text-xs sm:text-sm px-2 sm:px-3 py-1.5"
                         icon={PlusCircle}
+                        title="Add Task"
                     >
-                        <span className="sm:hidden">+</span>
                         <span className="hidden sm:inline">Add Task</span>
                     </Button>
                 </div>
@@ -1577,8 +1587,21 @@ const ManageTasks = ({ familyId, tasksInFamily, kidsInFamily, showConfirmation }
                                         </p>
                                     </div>
                                     <div className="flex space-x-2 mt-2 sm:mt-0 flex-shrink-0">
-                                        <Button onClick={() => openEditModal(task)} className="bg-blue-500 hover:bg-blue-600 px-3 py-1 text-sm" icon={Edit3}>Edit</Button>
-                                        <Button onClick={() => confirmDeleteTask(task)} className="bg-red-500 hover:bg-red-600 px-3 py-1 text-sm" icon={Trash2}>Delete</Button>
+                                        <Button
+                                            onClick={() => openEditModal(task)}
+                                            className="bg-blue-500 hover:bg-blue-600 px-2 sm:px-3 py-1 text-sm"
+                                            icon={Edit3}
+                                            title="Edit Task"
+                                        >
+                                            <span className="hidden sm:inline">Edit</span>
+                                        </Button>
+                                        <Button
+                                            onClick={() => confirmDeleteTask(task)} className="bg-red-500 hover:bg-red-600 px-2 sm:px-3 py-1 text-sm"
+                                            icon={Trash2}
+                                            title="Delete Task"
+                                        >
+                                            <span className="hidden sm:inline">Delete</span>
+                                        </Button>
                                     </div>
                                 </div>
                             </li>
@@ -1734,24 +1757,24 @@ const ManageRewards = ({ familyId, rewardsInFamily, showConfirmation }) => {
                 <div className="flex flex-wrap items-center gap-1 sm:gap-2">
                     <Button
                         onClick={() => requestSort('name')}
-                        className="bg-indigo-500 hover:bg-indigo-600 text-white font-medium px-2 sm:px-3 py-1 text-xs sm:text-sm"
+                        className="bg-slate-200 hover:bg-slate-300 text-slate-700 font-medium px-2 sm:px-3 py-1 text-xs sm:text-sm"
                         icon={null}
                     >
                         Name {getSortIcon('name')}
                     </Button>
                     <Button
                         onClick={() => requestSort('pointCost')}
-                        className="bg-indigo-500 hover:bg-indigo-600 text-white font-medium px-2 sm:px-3 py-1 text-xs sm:text-sm"
+                        className="bg-slate-200 hover:bg-slate-300 text-slate-700 font-medium px-2 sm:px-3 py-1 text-xs sm:text-sm"
                         icon={null}
                     >
                         Points {getSortIcon('pointCost')}
                     </Button>
                     <Button
                         onClick={openAddModal}
-                        className="bg-yellow-500 hover:bg-yellow-600 text-xs sm:text-sm px-3 py-1.5"
+                        className="bg-yellow-500 hover:bg-yellow-600 text-xs sm:text-sm px-2 sm:px-3 py-1.5"
                         icon={PlusCircle}
+                        title="Add Reward"
                     >
-                        <span className="sm:hidden">+</span>
                         <span className="hidden sm:inline">Add Reward</span>
                     </Button>
                 </div>
@@ -1769,17 +1792,19 @@ const ManageRewards = ({ familyId, rewardsInFamily, showConfirmation }) => {
                             <div className="flex space-x-2 mt-2 sm:mt-0">
                                 <Button
                                     onClick={() => openEditModal(reward)}
-                                    className="bg-blue-500 hover:bg-blue-600 px-3 py-1 text-sm"
+                                    className="bg-blue-500 hover:bg-blue-600 px-2 sm:px-3 py-1 text-sm"
                                     icon={Edit3}
+                                    title="Edit Reward"
                                 >
-                                    Edit
+                                    <span className="hidden sm:inline">Edit</span>
                                 </Button>
                                 <Button
                                     onClick={() => confirmDeleteReward(reward)}
-                                    className="bg-red-500 hover:bg-red-600 px-3 py-1 text-sm"
+                                    className="bg-red-500 hover:bg-red-600 px-2 sm:px-3 py-1 text-sm"
                                     icon={Trash2}
+                                    title="Delete Reward"
                                 >
-                                    Delete
+                                    <span className="hidden sm:inline">Delete</span>
                                 </Button>
                             </div>
                         </li>
