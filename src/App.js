@@ -1426,8 +1426,13 @@ const ManageTasks = ({ familyId, tasksInFamily, kidsInFamily, showConfirmation }
     const [sortConfig, setSortConfig] = useState({ key: 'effectiveDate', direction: 'ascending' });
 
     const initialFormState = {
-        name: '', points: '1', recurrenceType: 'none', daysOfWeek: [],
-        startDate: new Date().toISOString().split('T')[0], customDueDate: '', assignedKidId: ''
+        name: '', 
+        points: '1', 
+        recurrenceType: 'none', 
+        daysOfWeek: [],
+        startDate: new Date().toISOString().split('T')[0], 
+        customDueDate: new Date().toISOString().split('T')[0], // Default customDueDate to today initially
+        assignedKidId: ''
     };
     const [formData, setFormData] = useState(initialFormState);
 
@@ -1437,21 +1442,47 @@ const ManageTasks = ({ familyId, tasksInFamily, kidsInFamily, showConfirmation }
         { value: 'monthly', label: 'Monthly (based on start date)' }
     ];
     const kidOptions = [
-        { value: '', label: 'Unassigned (Any Kid)' },
-        ...kidsInFamily.map(k => ({ value: k.id, label: k.name }))
+        ...kidsInFamily.map(k => ({ value: k.id, label: k.name })) // Removed the explicit unassigned option here
     ];
 
     const handleInputChange = (e) => {
         const { name, value } = e.target;
         setFormData(prev => {
             const newState = { ...prev, [name]: value };
+            // Scenario 1: Start Date changes AND recurrence is already weekly
             if (name === "startDate" && newState.recurrenceType === "weekly") {
                 const newStartDateDay = DAYS_OF_WEEK[new Date(value + 'T00:00:00').getDay()];
                 if (newStartDateDay && !newState.daysOfWeek.includes(newStartDateDay)) {
                     newState.daysOfWeek = [...newState.daysOfWeek, newStartDateDay];
                 }
             }
+            // Scenario 1.b: Start Date changes, and it's a non-recurring task.
+            // Auto-set customDueDate if it's empty or before the new startDate.
+            // Or if customDueDate is not set to something validly after/on the new startDate
+            if (name === "startDate" && newState.recurrenceType === "none") {
+                // Always set customDueDate to the new startDate if startDate changes for a non-recurring task
+                // unless customDueDate is already explicitly set by the user to be later.
+                if (!newState.customDueDate || new Date(newState.customDueDate) < new Date(value) || newState.customDueDate === prev.customDueDate) {
+                    newState.customDueDate = value;
+                }
+            }
+            // Scenario 2: Recurrence type changes TO weekly
+            if (name === "recurrenceType" && value === "weekly" && newState.startDate) {
+                const currentStartDateDay = DAYS_OF_WEEK[new Date(newState.startDate + 'T00:00:00').getDay()];
+                if (currentStartDateDay && !newState.daysOfWeek.includes(currentStartDateDay)) {
+                    // If daysOfWeek is empty or doesn't include the start date's day, add it.
+                    newState.daysOfWeek = [...newState.daysOfWeek, currentStartDateDay];
+                }
+            }
             if (name === "recurrenceType" && value !== "weekly") {
+                newState.daysOfWeek = [];
+            }
+            // Scenario 3: Recurrence type changes TO "none".
+            // If customDueDate is empty or before startDate, set it to startDate.
+            if (name === "recurrenceType" && value === "none" && newState.startDate) {
+                if (!newState.customDueDate || new Date(newState.customDueDate) < new Date(newState.startDate)) {
+                    newState.customDueDate = newState.startDate;
+                }
                 newState.daysOfWeek = [];
             }
             return newState;
@@ -1467,7 +1498,11 @@ const ManageTasks = ({ familyId, tasksInFamily, kidsInFamily, showConfirmation }
 
     const openAddModal = () => {
         setEditingTask(null);
-        setFormData({ ...initialFormState, startDate: new Date().toISOString().split('T')[0] });
+        const todayDateString = new Date().toISOString().split('T')[0];
+        setFormData({ 
+            ...initialFormState, 
+            startDate: todayDateString, 
+            customDueDate: todayDateString }); // Ensure customDueDate also defaults to today for new tasks
         setFormError('');
         setIsModalOpen(true);
     };
@@ -2552,20 +2587,31 @@ const KidTasksList = ({ kid, familyId, allTasks, completedTasks, showConfirmatio
                     ct.taskDueDate?.toDate().getTime() === getStartOfDay(new Date(task.customDueDate)).getTime()
                 );
 
-                // Show if not completed/pending for this specific due date, AND due date is relevant to selected period
-                return !completedOrPendingForThisDueDate &&
-                    customDueDate >= today && // Must be at least today
-                    customDueDate <= (taskViewPeriod === 'today' ? todayEnd : weekEnd); // And within today/week
+                const isOverdue = customDueDate < today;
+                const isDueToday = customDueDate >= today && customDueDate <= todayEnd;
+
+                // Show if not completed/pending AND ( (is overdue OR is due today) OR it falls within the selected view period )
+                return !completedOrPendingForThisDueDate && (
+                    (isOverdue || isDueToday) ||
+                    (customDueDate >= today && customDueDate <= (taskViewPeriod === 'today' ? todayEnd : weekEnd))
+                );
 
             } else { // Recurring tasks
                 const nextDueDate = task.nextDueDate?.toDate ? getStartOfDay(task.nextDueDate.toDate()) : null;
                 if (!nextDueDate) return false;
 
-                // Check if the next due date falls within the selected period
-                const isDueInPeriod = (taskViewPeriod === 'today' && nextDueDate.getTime() === today.getTime()) ||
-                    (taskViewPeriod === 'week' && nextDueDate >= weekStart && nextDueDate <= weekEnd);
+                const isOverdue = nextDueDate < today;
+                const isDueToday = nextDueDate.getTime() === today.getTime();
 
-                if (!isDueInPeriod) return false;
+                // For "Today's Tasks" view, also consider if the task's startDate is today,
+                // especially for recurring tasks that might have a nextDueDate further out but should appear if they start today.
+                const startsToday = task.startDate ? getStartOfDay(new Date(task.startDate)).getTime() === today.getTime() : false;
+
+                // Check if the next due date falls within the selected period OR is overdue OR is due today (or starts today for 'today' view)
+                const isRelevantToPeriod = (taskViewPeriod === 'today' && (isDueToday || startsToday)) ||
+                                       (taskViewPeriod === 'week' && nextDueDate >= weekStart && nextDueDate <= weekEnd);
+
+                if (!isRelevantToPeriod && !isOverdue && !isDueToday) return false;
 
                 // Check if already submitted or approved for this specific next due date
                 const submittedOrApprovedForThisDueDate = completedTasks.find(ct =>
