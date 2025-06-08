@@ -1756,24 +1756,33 @@ const ManageTasks = ({ familyId, tasksInFamily, kidsInFamily, completedTasks, sh
 
                         let dueDateDisplayContent;
                         if (task.taskSpecificDueDate) {
-                            const todayTime = today.getTime();
-                            const diffDays = Math.ceil((task.taskSpecificDueDate.getTime() - todayTime) / (1000 * 60 * 60 * 24));
+                            // If we are showing "Done" tasks and this task instance is indeed done,
+                            // just display the formatted due date without any special badges.
+                            if (showDoneTaskInstances && task.isDoneForThisInstance) {
+                                dueDateDisplayContent = formatTaskDueDate(task.taskSpecificDueDate);
+                            } else {
+                                // Otherwise (viewing active tasks or a task that isn't 'done' in the 'done' view),
+                                // apply the standard badge logic.
+                                const todayTime = today.getTime();
+                                const diffDays = Math.ceil((task.taskSpecificDueDate.getTime() - todayTime) / (1000 * 60 * 60 * 24));
 
-                            if (diffDays < 0) {
-                                dueDateDisplayContent = (
-                                    <span className="flex items-center text-red-500 font-medium">
-                                        <AlertTriangle size={14} className="mr-1" /> Overdue ({formatTaskDueDate(task.taskSpecificDueDate)})
-                                    </span>
-                                );
-                            } else if (diffDays === 0) {
-                                dueDateDisplayContent = <span className="flex items-center text-orange-500 font-medium"><Bell size={14} className="mr-1" /> Today ({formatTaskDueDate(task.taskSpecificDueDate)})</span>;
-                            } else if (diffDays <= 3 && task.recurrenceType !== 'daily' && !task.isDoneForThisInstance) {
-                                dueDateDisplayContent = (
-                                    <span className="flex items-center text-orange-500 font-medium">
-                                        <Bell size={14} className="mr-1" /> {`${diffDays} day${diffDays !== 1 ? 's' : ''} left`} ({formatTaskDueDate(task.taskSpecificDueDate)})
-                                    </span>
-                                );
-                            } else { dueDateDisplayContent = formatTaskDueDate(task.taskSpecificDueDate); }
+                                if (diffDays < 0) { // Task is overdue (and not completed, due to filter or outer condition)
+                                    dueDateDisplayContent = (
+                                        <span className="flex items-center text-red-500 font-medium">
+                                            <AlertTriangle size={14} className="mr-1" /> Overdue ({formatTaskDueDate(task.taskSpecificDueDate)})
+                                        </span>
+                                    );
+                                } else if (diffDays === 0) { // Task is due today (and not completed)
+                                    dueDateDisplayContent = <span className="flex items-center text-orange-500 font-medium"><Bell size={14} className="mr-1" /> Today ({formatTaskDueDate(task.taskSpecificDueDate)})</span>;
+                                } else if (diffDays <= 3 && task.recurrenceType !== 'daily') { // Due soon, not daily, and not completed
+                                    dueDateDisplayContent = (
+                                        <span className="flex items-center text-orange-500 font-medium">
+                                            <Bell size={14} className="mr-1" /> {`${diffDays} day${diffDays !== 1 ? 's' : ''} left`} ({formatTaskDueDate(task.taskSpecificDueDate)})
+                                        </span>
+                                    );
+                                } else { // Due further out, or daily task due soon, or other cases
+                                    dueDateDisplayContent = formatTaskDueDate(task.taskSpecificDueDate); }
+                            }
                         } else {
                             dueDateDisplayContent = `Starts: ${formatShortDate(task.startDate ? new Date(task.startDate + 'T00:00:00') : null)}`;
                         }
