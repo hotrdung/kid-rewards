@@ -30,7 +30,7 @@ import {
 } from 'firebase/firestore';
 import {
     PlusCircle, Edit3, Trash2, CheckCircle, Gift, User, LogOut, DollarSign, ListChecks,
-    Award, Users, ClipboardList, Trophy, Bell, CalendarDays, Repeat, UserCheck, LogIn,
+    Award, Users, ClipboardList, Trophy, Bell, CalendarDays, Repeat, UserCheck, LogIn, ListOrdered, // Added ListOrdered
     ThumbsUp, ThumbsDown, ArrowUpCircle, ArrowDownCircle, Mail, ChevronsUpDown, RefreshCcw, AlertTriangle, Star,
     PackageCheck, PackageX, Eye, UsersRound, ShieldPlus, Building, UserCog, UserPlus, Coins,
     HomeIcon, AlertCircle, Info, MoreHorizontal
@@ -874,9 +874,19 @@ const AdminSection = ({ user, families, showConfirmation, switchToFamilyView, mi
 const ManageFamilies = ({ families, showConfirmation, currentUser }) => {
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [familyName, setFamilyName] = useState('');
+    const initialFamilyFormState = {
+        familyName: '',
+        highscoreScope: 'disabled', // 'disabled', 'internal', 'global'
+    };
+    const [familyFormData, setFamilyFormData] = useState(initialFamilyFormState);
     const [editingFamily, setEditingFamily] = useState(null);
     const [formError, setFormError] = useState('');
 
+    const highscoreScopeOptions = [
+        { value: 'disabled', label: 'Disabled - No highscores' },
+        { value: 'internal', label: 'Family Only - Kids see scores within their own family' },
+        { value: 'global', label: 'Global - Kids see scores from all other globally participating families' },
+    ];
     const openAddModal = () => {
         setEditingFamily(null);
         setFamilyName('');
@@ -885,19 +895,28 @@ const ManageFamilies = ({ families, showConfirmation, currentUser }) => {
     };
     const openEditModal = (family) => {
         setEditingFamily(family);
-        setFamilyName(family.familyName);
+        setFamilyFormData({
+            familyName: family.familyName,
+            highscoreScope: family.highscoreScope || 'disabled',
+        });
         setFormError('');
         setIsModalOpen(true);
     };
 
+    const handleFamilyFormChange = (e) => {
+        const { name, value } = e.target;
+        setFamilyFormData(prev => ({ ...prev, [name]: value }));
+    };
+
     const handleSaveFamily = async () => {
-        if (!familyName.trim()) {
+        if (!familyFormData.familyName.trim()) {
             setFormError('Family name is required.');
             return;
         }
         setFormError('');
         const familyData = {
-            familyName: familyName.trim(),
+            familyName: familyFormData.familyName.trim(),
+            highscoreScope: familyFormData.highscoreScope,
             updatedAt: Timestamp.now(),
             updatedBy: currentUser.uid,
         };
@@ -956,6 +975,11 @@ const ManageFamilies = ({ families, showConfirmation, currentUser }) => {
                             <div>
                                 <span className="font-medium text-lg text-gray-800">{fam.familyName}</span>
                                 <p className="text-xs text-gray-500 mt-0.5">ID: {fam.id}</p>
+                                <p className="text-xs text-gray-500 mt-0.5">
+                                    Highscores: <span className="font-medium">
+                                        {highscoreScopeOptions.find(opt => opt.value === (fam.highscoreScope || 'disabled'))?.label || 'Disabled'}
+                                    </span>
+                                </p>
                             </div>
                             <div className="flex space-x-2 mt-2 sm:mt-0">
                                 <Button
@@ -985,7 +1009,16 @@ const ManageFamilies = ({ families, showConfirmation, currentUser }) => {
                 title={editingFamily ? "Edit Family" : "Add New Family"}
             >
                 {formError && <p className="text-red-500 text-sm mb-2">{formError}</p>}
-                <InputField label="Family Name" value={familyName} onChange={e => setFamilyName(e.target.value)} required />
+                <InputField
+                    label="Family Name"
+                    name="familyName"
+                    value={familyFormData.familyName}
+                    onChange={handleFamilyFormChange} required />
+                <SelectField
+                    label="Highscore Visibility"
+                    name="highscoreScope"
+                    value={familyFormData.highscoreScope}
+                    onChange={handleFamilyFormChange} options={highscoreScopeOptions} />
                 <Button onClick={handleSaveFamily} className="w-full bg-green-500 hover:bg-green-600">
                     {editingFamily ? "Save Changes" : "Create Family"}
                 </Button>
@@ -2485,6 +2518,7 @@ const KidDashboard = ({ kidData, familyId, allTasks, rewards, completedTasks, re
             case 'tasks': return <KidTasksList kid={kid} familyId={familyId} allTasks={allTasks} completedTasks={completedTasks} showConfirmation={showConfirmation} />;
             case 'rewards': return <KidRewardsList kid={kid} familyId={familyId} rewards={rewards} showConfirmation={showConfirmation} />;
             case 'history': return <KidHistory kid={kid} familyId={familyId} completedTasks={completedTasks} redeemedRewards={redeemedRewardsData} />;
+            case 'highscores': return <KidHighscores currentKid={kid} currentFamilyId={familyId} />;
             default: return <KidProfile kid={kid} pointsToday={pointsToday} pointsThisWeek={pointsThisWeek} pointsThisMonth={pointsThisMonth} pendingPoints={pendingPoints} />;
         }
     };
@@ -2505,6 +2539,7 @@ const KidDashboard = ({ kidData, familyId, allTasks, rewards, completedTasks, re
                     <NavItem tabName="profile" icon={User} label="My Profile" />
                     <NavItem tabName="tasks" icon={ClipboardList} label="My Tasks" />
                     <NavItem tabName="rewards" icon={Gift} label="Redeem Rewards" />
+                    <NavItem tabName="highscores" icon={ListOrdered} label="Highscores" />
                     <NavItem tabName="history" icon={ListChecks} label="My History" />
                 </div>
             </nav>
@@ -3045,6 +3080,183 @@ const KidHistory = ({ kid, familyId, completedTasks, redeemedRewards }) => {
                 )}
             </Card>
         </div>
+    );
+};
+
+// --- Kid Highscores (New Component) ---
+const KidHighscores = ({ currentKid, currentFamilyId }) => {
+    const [scores, setScores] = useState([]);
+    const [isLoading, setIsLoading] = useState(true);
+    const [error, setErrorMsg] = useState('');
+    const [familyScope, setFamilyScope] = useState(null); // 'disabled', 'internal', 'global'
+
+    useEffect(() => {
+        const fetchFamilyScope = async () => {
+            setIsLoading(true);
+            setErrorMsg('');
+            try {
+                const familyDocRef = doc(db, familiesCollectionPath, currentFamilyId);
+                const familyDocSnap = await getDoc(familyDocRef);
+                if (familyDocSnap.exists()) {
+                    setFamilyScope(familyDocSnap.data().highscoreScope || 'disabled');
+                } else {
+                    setErrorMsg("Your family's settings could not be loaded.");
+                    setFamilyScope('disabled');
+                }
+            } catch (e) {
+                console.error("Error fetching family scope:", e);
+                setErrorMsg("Error loading highscore settings.");
+                setFamilyScope('disabled');
+            }
+        };
+        fetchFamilyScope();
+    }, [currentFamilyId]);
+
+    useEffect(() => {
+        if (!familyScope) {
+            if (isLoading && !error) { /* only set loading if not already error */ }
+            else { setIsLoading(false); }
+            return;
+        }
+
+        const fetchScores = async () => {
+            setIsLoading(true);
+            setErrorMsg('');
+            setScores([]);
+
+            try {
+                let fetchedKids = [];
+                if (familyScope === 'internal') {
+                    const kidsQuery = query(collection(db, getFamilyScopedCollectionPath(currentFamilyId, 'kids')));
+                    const kidsSnap = await getDocs(kidsQuery);
+                    const familyDoc = await getDoc(doc(db, familiesCollectionPath, currentFamilyId));
+                    const familyName = familyDoc.exists() ? familyDoc.data().familyName : "Your Family";
+                    kidsSnap.forEach(kidDoc => {
+                        const kidData = kidDoc.data();
+                        fetchedKids.push({
+                            id: kidDoc.id,
+                            name: kidData.name,
+                            points: kidData.totalEarnedPoints || 0,
+                            familyName: familyName,
+                            isCurrentUser: kidDoc.id === currentKid.id
+                        });
+                    });
+                } else if (familyScope === 'global') {
+                    const participatingFamiliesQuery = query(collection(db, familiesCollectionPath), where("highscoreScope", "==", "global"));
+                    const familiesSnap = await getDocs(participatingFamiliesQuery);
+
+                    const kidFetchPromises = [];
+                    familiesSnap.forEach(familyDoc => {
+                        const familyData = familyDoc.data();
+                        const kidsInFamilyQuery = query(collection(db, getFamilyScopedCollectionPath(familyDoc.id, 'kids')));
+                        kidFetchPromises.push(
+                            getDocs(kidsInFamilyQuery).then(kidsSnap => {
+                                return kidsSnap.docs.map(kidDoc => {
+                                    const kidData = kidDoc.data();
+                                    return {
+                                        id: kidDoc.id, // Firestore document ID of the kid
+                                        authUid: kidData.authUid, // Firebase Auth UID of the kid, if linked
+                                        name: kidData.name,
+                                        points: kidData.totalEarnedPoints || 0,
+                                        familyName: familyData.familyName,
+                                        // currentKid.id is the logged-in kid's Firestore doc ID in *their* family
+                                        // currentKid.authUid is the logged-in kid's Firebase Auth UID
+                                        isCurrentUser: (kidData.authUid === currentKid.authUid || kidDoc.id === currentKid.id) && familyDoc.id === currentFamilyId
+                                    };
+                                });
+                            })
+                        );
+                    });
+                    const results = await Promise.all(kidFetchPromises);
+                    fetchedKids = results.flat();
+                }
+
+                fetchedKids.sort((a, b) => b.points - a.points);
+                setScores(fetchedKids);
+
+            } catch (e) {
+                console.error("Error fetching highscores:", e);
+                setErrorMsg("Could not load highscores. " + e.message);
+            } finally {
+                setIsLoading(false);
+            }
+        };
+
+        if (familyScope && familyScope !== 'disabled') {
+            fetchScores();
+        } else {
+            setIsLoading(false); // Not loading if disabled
+        }
+    }, [familyScope, currentFamilyId, currentKid.id, currentKid.authUid]); // Added currentKid.authUid
+
+
+    if (isLoading) {
+        return (
+            <Card>
+                <h3 className="text-2xl font-semibold text-gray-700 mb-4">Highscores</h3>
+                <p>Loading highscores...</p>
+            </Card>
+        );
+    }
+
+    if (error) {
+        return (
+            <Card>
+                <h3 className="text-2xl font-semibold text-gray-700 mb-4">Highscores</h3>
+                <p className="text-red-500">{error}</p>
+            </Card>
+        );
+    }
+
+    if (familyScope === 'disabled') {
+        return (
+            <Card>
+                <h3 className="text-2xl font-semibold text-gray-700 mb-4">Highscores</h3>
+                <p className="text-gray-600">Highscores are not enabled for your family.</p>
+            </Card>
+        );
+    }
+    if (scores.length === 0 && (familyScope === 'internal' || familyScope === 'global')) {
+         return (
+            <Card>
+                <h3 className="text-2xl font-semibold text-gray-700 mb-4">Highscores</h3>
+                <p className="text-gray-600">No scores to display yet. Keep earning points!</p>
+            </Card>
+        );
+    }
+
+    return (
+        <Card>
+            <h3 className="text-2xl font-semibold text-gray-700 mb-6">Highscores</h3>
+            <div className="overflow-x-auto">
+                <table className="min-w-full divide-y divide-gray-200">
+                    <thead className="bg-gray-50">
+                        <tr>
+                            <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Rank</th>
+                            <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Name</th>
+                            {familyScope === 'global' && (
+                                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Family</th>
+                            )}
+                            <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Total Points Earned</th>
+                        </tr>
+                    </thead>
+                    <tbody className="bg-white divide-y divide-gray-200">
+                        {scores.map((score, index) => (
+                            <tr key={score.id + score.familyName} className={score.isCurrentUser ? 'bg-green-100 font-semibold' : ''}>
+                                <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-700">{index + 1}</td>
+                                <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-900">
+                                    {score.name} {score.isCurrentUser && <Star size={14} className="inline ml-1 text-yellow-500 fill-current" />}
+                                </td>
+                                {familyScope === 'global' && (
+                                    <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-500">{score.familyName}</td>
+                                )}
+                                <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-700">{score.points}</td>
+                            </tr>
+                        ))}
+                    </tbody>
+                </table>
+            </div>
+        </Card>
     );
 };
 
