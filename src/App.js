@@ -30,7 +30,7 @@ import {
 } from 'firebase/firestore';
 import {
     PlusCircle, Edit3, Trash2, CheckCircle, Gift, User, LogOut, DollarSign, ListChecks,
-    Award, Users, ClipboardList, Trophy, Bell, CalendarDays, Repeat, UserCheck, LogIn, ListOrdered, // Added ListOrdered
+    Award, Users, ClipboardList, Trophy, Bell, CalendarDays, Repeat, UserCheck, LogIn, ListOrdered, Copy, EyeOff, EyeIcon, // Changed EyeSlash to EyeOff
     ThumbsUp, ThumbsDown, ArrowUpCircle, ArrowDownCircle, Mail, ChevronsUpDown, RefreshCcw, AlertTriangle, Star,
     PackageCheck, PackageX, Eye, UsersRound, ShieldPlus, Building, UserCog, UserPlus, Coins,
     HomeIcon, AlertCircle, Info, MoreHorizontal
@@ -1158,7 +1158,7 @@ const ParentDashboard = ({ user, familyId, kids, tasks, rewards, completedTasks,
     const renderContent = () => {
         switch (activeTab) {
             case 'kids': return <ManageKids parentUser={user} familyId={familyId} kidsInFamily={kids} completedTasks={completedTasks} showConfirmation={showConfirmation} />;
-            case 'tasks': return <ManageTasks familyId={familyId} tasksInFamily={tasks} kidsInFamily={kids} showConfirmation={showConfirmation} />;
+            case 'tasks': return <ManageTasks familyId={familyId} tasksInFamily={tasks} kidsInFamily={kids} completedTasks={completedTasks} showConfirmation={showConfirmation} />;
             case 'rewards': return <ManageRewards familyId={familyId} rewardsInFamily={rewards} showConfirmation={showConfirmation} />;
             case 'approveTasks': return <ApproveTasks familyId={familyId} pendingTasks={pendingTasks} kidsInFamily={kids} allTasksInFamily={tasks} showConfirmation={showConfirmation} firebaseUser={user} />;
             case 'fulfillRewards': return <FulfillRewards familyId={familyId} pendingRewards={pendingFulfillmentRewards} kidsInFamily={kids} allRewardsList={rewards} showConfirmation={showConfirmation} firebaseUser={user} />;
@@ -1452,12 +1452,16 @@ const ManageKids = ({ parentUser, familyId, kidsInFamily, completedTasks, showCo
 };
 
 // --- Manage Tasks (Parent) ---
-const ManageTasks = ({ familyId, tasksInFamily, kidsInFamily, showConfirmation }) => {
+const ManageTasks = ({ familyId, tasksInFamily, kidsInFamily, completedTasks, showConfirmation }) => {
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [editingTask, setEditingTask] = useState(null);
     const [formError, setFormError] = useState('');
     const [sortConfig, setSortConfig] = useState({ key: 'effectiveDate', direction: 'ascending' });
 
+    
+    const [showDoneTaskInstances, setShowDoneTaskInstances] = useState(false);
+
+    const today = useMemo(() => getStartOfDay(new Date()), []);
     const initialFormState = {
         name: '', 
         points: '1', 
@@ -1555,6 +1559,21 @@ const ManageTasks = ({ familyId, tasksInFamily, kidsInFamily, showConfirmation }
         setIsModalOpen(true);
     };
 
+    const handleCloneTask = (taskToClone) => {
+        setEditingTask(null); // Ensure it's a new task
+        setFormData({
+            name: `Copy of ${taskToClone.name}`,
+            points: taskToClone.points.toString(),
+            recurrenceType: taskToClone.recurrenceType || 'none',
+            daysOfWeek: taskToClone.daysOfWeek || [],
+            startDate: taskToClone.startDate ? new Date(taskToClone.startDate + 'T00:00:00').toISOString().split('T')[0] : new Date().toISOString().split('T')[0],
+            customDueDate: taskToClone.customDueDate ? new Date(taskToClone.customDueDate + 'T00:00:00').toISOString().split('T')[0] : '',
+            assignedKidId: taskToClone.assignedKidId || '',
+        });
+        setFormError('');
+        setIsModalOpen(true);
+    };
+
     const handleSaveTask = async () => {
         if (!formData.name.trim() || !formData.points || isNaN(parseInt(formData.points)) || parseInt(formData.points) <= 0) {
             setFormError('Task name and a positive point value are required.'); return;
@@ -1621,18 +1640,40 @@ const ManageTasks = ({ familyId, tasksInFamily, kidsInFamily, showConfirmation }
         }
     };
 
-    const sortedTasks = useMemo(() => {
-        let sortableItems = [...tasksInFamily];
-        if (sortConfig.key !== null) {
-            sortableItems.forEach(task => {
-                if (task.recurrenceType === 'none') {
-                    task.effectiveDate = task.customDueDate ? getStartOfDay(new Date(task.customDueDate)).getTime() : 0;
-                } else {
-                    task.effectiveDate = task.nextDueDate?.toMillis() || (task.startDate ? getStartOfDay(new Date(task.startDate)).getTime() : 0);
-                }
-            });
+    const processedAndSortedTasks = useMemo(() => {
+        let processedTasks = tasksInFamily.map(task => {
+            const taskSpecificDueDate = task.recurrenceType === 'none'
+                ? (task.customDueDate ? getStartOfDay(new Date(task.customDueDate)) : null)
+                : (task.nextDueDate?.toDate ? getStartOfDay(task.nextDueDate.toDate()) : null);
 
-            sortableItems.sort((a,b) => {
+            const isDoneForThisInstance = taskSpecificDueDate ? completedTasks.some(ct =>
+                ct.taskId === task.id &&
+                ct.status === 'approved' &&
+                ct.taskDueDate?.toDate().getTime() === taskSpecificDueDate.getTime()
+            ) : false;
+
+            let effectiveDateForSort;
+            if (task.recurrenceType === 'none') {
+                effectiveDateForSort = task.customDueDate ? getStartOfDay(new Date(task.customDueDate)).getTime() : 0;
+            } else {
+                effectiveDateForSort = task.nextDueDate?.toMillis() || (task.startDate ? getStartOfDay(new Date(task.startDate)).getTime() : 0);
+            }
+
+            return { ...task, isDoneForThisInstance, effectiveDate: effectiveDateForSort, taskSpecificDueDate };
+        });
+
+        // Filter based on showDoneTaskInstances
+        processedTasks = processedTasks.filter(task => {
+            // Always show tasks that haven't started yet if they would otherwise be visible
+            const taskStartDate = task.startDate ? getStartOfDay(new Date(task.startDate)) : today;
+            if (taskStartDate > today && !showDoneTaskInstances) return true; // Show future tasks if not showing done ones
+            if (taskStartDate > today && showDoneTaskInstances) return false; // Hide future tasks if showing done ones (as they can't be done)
+
+            return showDoneTaskInstances ? task.isDoneForThisInstance : !task.isDoneForThisInstance;
+        });
+
+        if (sortConfig.key !== null) {
+            processedTasks.sort((a,b) => {
                 let valA = a[sortConfig.key];
                 let valB = b[sortConfig.key];
 
@@ -1647,8 +1688,8 @@ const ManageTasks = ({ familyId, tasksInFamily, kidsInFamily, showConfirmation }
                 return 0;
             });
         }
-        return sortableItems;
-    }, [tasksInFamily, sortConfig]);
+        return processedTasks;
+    }, [tasksInFamily, completedTasks, sortConfig, showDoneTaskInstances, today]);
 
     const requestSort = (key) => {
         let direction = 'ascending';
@@ -1666,8 +1707,15 @@ const ManageTasks = ({ familyId, tasksInFamily, kidsInFamily, showConfirmation }
     return (
         <Card>
             <div className="flex flex-col sm:flex-row justify-between items-center mb-6 gap-2">
-                <h3 className="text-2xl font-semibold text-gray-700">Tasks</h3>
+                <h3 className="text-2xl font-semibold text-gray-700">
+                    {showDoneTaskInstances ? "Completed Task Instances" : "Manage Tasks"}
+                </h3>
                 <div className="flex flex-wrap items-center gap-1 sm:gap-2">
+                     <Button onClick={() => setShowDoneTaskInstances(!showDoneTaskInstances)}
+                        className={`text-xs sm:text-sm px-2 sm:px-3 py-1 ${showDoneTaskInstances ? 'bg-gray-300 hover:bg-gray-400 text-gray-800' : 'bg-gray-200 hover:bg-gray-300 text-gray-700'}`}
+                        icon={showDoneTaskInstances ? EyeIcon : EyeOff}>
+                        {showDoneTaskInstances ? "Show Active" : "Show Done"}
+                    </Button>
                      {/* Changed default sort to 'effectiveDate' which considers nextDueDate or customDueDate */}
                     <Button
                         onClick={() => requestSort('effectiveDate')}
@@ -1693,12 +1741,11 @@ const ManageTasks = ({ familyId, tasksInFamily, kidsInFamily, showConfirmation }
                     </Button>
                 </div>
             </div>
-            {sortedTasks.length === 0 ? (
-                <p className="text-gray-500">No tasks defined yet for this family.</p>
+            {processedAndSortedTasks.length === 0 ? (
+                <p className="text-gray-500">{showDoneTaskInstances ? "No completed task instances to show for the current filter." : "No active tasks to display. Try adding some or check the 'Show Done' filter."}</p>
             ) : (
                 <ul className="space-y-3">
-                    {sortedTasks.map(task => {
-                        const today = getStartOfDay(new Date());
+                    {processedAndSortedTasks.map(task => {
                         const assignedKid = kidsInFamily.find(k => k.id === task.assignedKidId);
                         let recurrenceDisplay = task.recurrenceType || 'None';
                         if (task.recurrenceType === 'weekly' && task.daysOfWeek?.length > 0) {
@@ -1707,29 +1754,26 @@ const ManageTasks = ({ familyId, tasksInFamily, kidsInFamily, showConfirmation }
                             recurrenceDisplay = task.recurrenceType.charAt(0).toUpperCase() + task.recurrenceType.slice(1);
                         }
 
-                        const taskSpecificDueDate = task.recurrenceType === 'none'
-                            ? (task.customDueDate ? getStartOfDay(new Date(task.customDueDate)) : null)
-                            : (task.nextDueDate?.toDate ? getStartOfDay(task.nextDueDate.toDate()) : null);
-
                         let dueDateDisplayContent;
-                        if (taskSpecificDueDate) {
-                            const diffDays = Math.ceil((taskSpecificDueDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+                        if (task.taskSpecificDueDate) {
+                            const todayTime = today.getTime();
+                            const diffDays = Math.ceil((task.taskSpecificDueDate.getTime() - todayTime) / (1000 * 60 * 60 * 24));
 
                             if (diffDays < 0) {
                                 dueDateDisplayContent = (
                                     <span className="flex items-center text-red-500 font-medium">
-                                        <AlertTriangle size={14} className="mr-1" /> Overdue ({formatTaskDueDate(taskSpecificDueDate)})
+                                        <AlertTriangle size={14} className="mr-1" /> Overdue ({formatTaskDueDate(task.taskSpecificDueDate)})
                                     </span>
                                 );
-                            } else if (diffDays <= 3 && task.recurrenceType !== 'daily') {
+                            } else if (diffDays === 0) {
+                                dueDateDisplayContent = <span className="flex items-center text-orange-500 font-medium"><Bell size={14} className="mr-1" /> Today ({formatTaskDueDate(task.taskSpecificDueDate)})</span>;
+                            } else if (diffDays <= 3 && task.recurrenceType !== 'daily' && !task.isDoneForThisInstance) {
                                 dueDateDisplayContent = (
                                     <span className="flex items-center text-orange-500 font-medium">
-                                        <Bell size={14} className="mr-1" /> {diffDays === 0 ? 'Today' : `${diffDays} day${diffDays !== 1 ? 's' : ''} left`} ({formatTaskDueDate(taskSpecificDueDate)})
+                                        <Bell size={14} className="mr-1" /> {`${diffDays} day${diffDays !== 1 ? 's' : ''} left`} ({formatTaskDueDate(task.taskSpecificDueDate)})
                                     </span>
                                 );
-                            } else {
-                                dueDateDisplayContent = formatTaskDueDate(taskSpecificDueDate);
-                            }
+                            } else { dueDateDisplayContent = formatTaskDueDate(task.taskSpecificDueDate); }
                         } else {
                             dueDateDisplayContent = `Starts: ${formatShortDate(task.startDate ? new Date(task.startDate + 'T00:00:00') : null)}`;
                         }
@@ -1752,7 +1796,15 @@ const ManageTasks = ({ familyId, tasksInFamily, kidsInFamily, showConfirmation }
                                             Assigned to: <span className="font-medium">{assignedKid ? assignedKid.name : 'Any Kid'}</span>
                                         </p>
                                     </div>
-                                    <div className="flex space-x-2 mt-2 sm:mt-0 flex-shrink-0">
+                                    <div className="flex space-x-1 sm:space-x-2 mt-2 sm:mt-0 flex-shrink-0">
+                                        <Button
+                                            onClick={() => handleCloneTask(task)}
+                                            className="bg-sky-500 hover:bg-sky-600 px-2 py-1 text-xs sm:text-sm"
+                                            icon={Copy}
+                                            title="Clone Task"
+                                        >
+                                            <span className="hidden sm:inline">Clone</span>
+                                        </Button>
                                         <Button
                                             onClick={() => openEditModal(task)}
                                             className="bg-blue-500 hover:bg-blue-600 px-2 sm:px-3 py-1 text-sm"
@@ -1863,6 +1915,18 @@ const ManageRewards = ({ familyId, rewardsInFamily, showConfirmation }) => {
         setFormError('');
         setIsModalOpen(true);
     };
+
+    const handleCloneReward = (rewardToClone) => {
+        setEditingReward(null); // Ensure it's a new reward
+        setRewardName(`Copy of ${rewardToClone.name}`);
+        setRewardCost(rewardToClone.pointCost.toString());
+        // Retain isAvailable status from the cloned item, or default to true
+        // For a new clone, it should probably default to available.
+        // The original handleSaveOrUpdateReward sets isAvailable = true for new.
+        setFormError('');
+        setIsModalOpen(true);
+    };
+
     const [rewardToDelete, setRewardToDelete] = useState(null);
     const confirmDeleteReward = (reward) => {
         setRewardToDelete(reward);
@@ -1955,7 +2019,15 @@ const ManageRewards = ({ familyId, rewardsInFamily, showConfirmation }) => {
                                 <span className="font-medium text-lg text-gray-800">{reward.name}</span>
                                 <span className="ml-4 text-sm text-yellow-700 font-semibold">{reward.pointCost} points</span>
                             </div>
-                            <div className="flex space-x-2 mt-2 sm:mt-0">
+                            <div className="flex space-x-1 sm:space-x-2 mt-2 sm:mt-0">
+                                <Button
+                                    onClick={() => handleCloneReward(reward)}
+                                    className="bg-sky-500 hover:bg-sky-600 px-2 py-1 text-xs sm:text-sm"
+                                    icon={Copy}
+                                    title="Clone Reward"
+                                >
+                                    <span className="hidden sm:inline">Clone</span>
++                                </Button>
                                 <Button
                                     onClick={() => openEditModal(reward)}
                                     className="bg-blue-500 hover:bg-blue-600 px-2 sm:px-3 py-1 text-sm"
