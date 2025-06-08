@@ -70,6 +70,7 @@ const getOldPublicDataCollectionPath = (collectionName) => `/artifacts/${current
 
 const usersCollectionPath = getGlobalCollectionPath('users');
 const familiesCollectionPath = getGlobalCollectionPath('families');
+const highscoreGroupsCollectionPath = getGlobalCollectionPath('highscoreGroups');
 
 // --- Date Helper Functions ---
 const MONTHS_SHORT = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -807,6 +808,7 @@ const AdminSection = ({ user, families, showConfirmation, switchToFamilyView, mi
     const adminNavItems = [
         { name: 'manageFamilies', icon: Building, label: "Manage Families" },
         { name: 'manageFamilyParents', icon: UserCog, label: "Manage Family Parents" },
+        { name: 'manageHighscoreGroups', icon: UsersRound, label: "Highscore Groups"},
     ];
 
     const parentRoles = user.familyRoles?.filter(r => r.role === 'parent') || [];
@@ -865,8 +867,106 @@ const AdminSection = ({ user, families, showConfirmation, switchToFamilyView, mi
                         currentUser={user}
                     />
                 }
+                {activeTab === 'manageHighscoreGroups' &&
+                    <ManageHighscoreGroups showConfirmation={showConfirmation} currentUser={user} />
+                }
             </div>
         </div>
+    );
+};
+
+// --- Manage Highscore Groups (SA) ---
+const ManageHighscoreGroups = ({ showConfirmation, currentUser }) => {
+    const [groups, setGroups] = useState([]);
+    const [isLoading, setIsLoading] = useState(true);
+    const [isModalOpen, setIsModalOpen] = useState(false);
+    const [groupName, setGroupName] = useState('');
+    const [editingGroup, setEditingGroup] = useState(null);
+    const [formError, setFormError] = useState('');
+
+    useEffect(() => {
+        const q = query(collection(db, highscoreGroupsCollectionPath));
+        const unsubscribe = onSnapshot(q, (snapshot) => {
+            setGroups(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
+            setIsLoading(false);
+        }, (error) => {
+            console.error("Error fetching highscore groups:", error);
+            setFormError("Failed to load highscore groups.");
+            setIsLoading(false);
+        });
+        return () => unsubscribe();
+    }, []);
+
+    const openAddModal = () => {
+        setEditingGroup(null); setGroupName(''); setFormError(''); setIsModalOpen(true);
+    };
+    const openEditModal = (group) => {
+        setEditingGroup(group); setGroupName(group.name); setFormError(''); setIsModalOpen(true);
+    };
+
+    const handleSaveGroup = async () => {
+        if (!groupName.trim()) { setFormError('Group name is required.'); return; }
+        setFormError('');
+        const groupData = {
+            name: groupName.trim(),
+            updatedAt: Timestamp.now(),
+            updatedBy: currentUser.uid,
+        };
+        try {
+            if (editingGroup) {
+                await updateDoc(doc(db, highscoreGroupsCollectionPath, editingGroup.id), groupData);
+            } else {
+                groupData.createdAt = Timestamp.now();
+                groupData.createdBy = currentUser.uid;
+                await addDoc(collection(db, highscoreGroupsCollectionPath), groupData);
+            }
+            setIsModalOpen(false);
+        } catch (e) {
+            console.error("Error saving highscore group:", e);
+            setFormError("Failed to save group.");
+        }
+    };
+
+    const confirmDeleteGroup = (group) => {
+        showConfirmation(
+            "Delete Highscore Group",
+            `Are you sure you want to delete the group "${group.name}"? Families assigned to this group will need to be reassigned.`,
+            async () => {
+                try {
+                    await deleteDoc(doc(db, highscoreGroupsCollectionPath, group.id));
+                    // Note: This doesn't automatically unassign families. Admin needs to manage that.
+                } catch (e) { console.error("Error deleting highscore group:", e); }
+            }
+        );
+    };
+
+    if (isLoading) return <Card><p>Loading highscore groups...</p></Card>;
+
+    return (
+        <Card>
+            <div className="flex justify-between items-center mb-6">
+                <h3 className="text-2xl font-semibold text-gray-700">Manage Highscore Groups</h3>
+                <Button onClick={openAddModal} icon={PlusCircle} className="bg-green-500 hover:bg-green-600">Add Group</Button>
+            </div>
+            {groups.length === 0 ? <p className="text-gray-500">No highscore groups created yet.</p> : (
+                <ul className="space-y-3">
+                    {groups.map(g => (
+                        <li key={g.id} className="flex justify-between items-center p-3 bg-gray-50 rounded-lg">
+                            <span className="font-medium text-gray-800">{g.name}</span>
+                            <div className="space-x-2">
+                                <Button onClick={() => openEditModal(g)} icon={Edit3} className="bg-blue-500 hover:bg-blue-600 px-3 py-1 text-sm">Edit</Button>
+                                <Button onClick={() => confirmDeleteGroup(g)} icon={Trash2} className="bg-red-500 hover:bg-red-600 px-3 py-1 text-sm">Delete</Button>
+                            </div>
+                        </li>
+                    ))}
+                </ul>
+            )}
+            <Modal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} title={editingGroup ? "Edit Group" : "Add New Group"}>
+                {formError && <p className="text-red-500 text-sm mb-2">{formError}</p>}
+                <InputField label="Group Name" value={groupName} onChange={e => setGroupName(e.target.value)} required />
+                <Button onClick={handleSaveGroup} className="w-full bg-green-500 hover:bg-green-600">{editingGroup ? "Save Changes" : "Create Group"}</Button>
+            </Modal>
+        </Card>
     );
 };
 
@@ -877,19 +977,31 @@ const ManageFamilies = ({ families, showConfirmation, currentUser }) => {
     const initialFamilyFormState = {
         familyName: '',
         highscoreScope: 'disabled', // 'disabled', 'internal', 'global'
+        highscoreGroupId: '', // New field
     };
     const [familyFormData, setFamilyFormData] = useState(initialFamilyFormState);
     const [editingFamily, setEditingFamily] = useState(null);
     const [formError, setFormError] = useState('');
+    const [highscoreGroups, setHighscoreGroups] = useState([]);
+
+    useEffect(() => {
+        const q = query(collection(db, highscoreGroupsCollectionPath));
+        const unsubscribe = onSnapshot(q, (snapshot) => {
+            setHighscoreGroups(snapshot.docs.map(d => ({ value: d.id, label: d.data().name })));
+        }, (error) => {
+            console.error("Error fetching highscore groups for family management:", error);
+        });
+        return () => unsubscribe();
+    }, []);
 
     const highscoreScopeOptions = [
         { value: 'disabled', label: 'Disabled - No highscores' },
         { value: 'internal', label: 'Family Only - Kids see scores within their own family' },
-        { value: 'global', label: 'Global - Kids see scores from all other globally participating families' },
+        { value: 'group', label: 'Assigned Group - Kids see scores from families in the same group' },
     ];
     const openAddModal = () => {
         setEditingFamily(null);
-        setFamilyName('');
+        setFamilyFormData(initialFamilyFormState); // Reset form
         setFormError('');
         setIsModalOpen(true);
     };
@@ -898,6 +1010,7 @@ const ManageFamilies = ({ families, showConfirmation, currentUser }) => {
         setFamilyFormData({
             familyName: family.familyName,
             highscoreScope: family.highscoreScope || 'disabled',
+            highscoreGroupId: family.highscoreGroupId || '',
         });
         setFormError('');
         setIsModalOpen(true);
@@ -917,9 +1030,16 @@ const ManageFamilies = ({ families, showConfirmation, currentUser }) => {
         const familyData = {
             familyName: familyFormData.familyName.trim(),
             highscoreScope: familyFormData.highscoreScope,
+            highscoreGroupId: familyFormData.highscoreScope === 'group' ? familyFormData.highscoreGroupId : null,
             updatedAt: Timestamp.now(),
             updatedBy: currentUser.uid,
         };
+
+        if (familyFormData.highscoreScope === 'group' && !familyFormData.highscoreGroupId) {
+            setFormError('Please select a highscore group if "Assigned Group" visibility is chosen.');
+            return;
+        }
+
         try {
             if (editingFamily) {
                 await updateDoc(doc(db, familiesCollectionPath, editingFamily.id), familyData);
@@ -975,11 +1095,14 @@ const ManageFamilies = ({ families, showConfirmation, currentUser }) => {
                             <div>
                                 <span className="font-medium text-lg text-gray-800">{fam.familyName}</span>
                                 <p className="text-xs text-gray-500 mt-0.5">ID: {fam.id}</p>
-                                <p className="text-xs text-gray-500 mt-0.5">
+                                <div className="text-xs text-gray-500 mt-0.5">
                                     Highscores: <span className="font-medium">
                                         {highscoreScopeOptions.find(opt => opt.value === (fam.highscoreScope || 'disabled'))?.label || 'Disabled'}
                                     </span>
-                                </p>
+                                    {fam.highscoreScope === 'group' && fam.highscoreGroupId && (
+                                        <span className="ml-1 text-blue-600">({highscoreGroups.find(g => g.value === fam.highscoreGroupId)?.label || 'Unknown Group'})</span>
+                                    )}
+                                </div>
                             </div>
                             <div className="flex space-x-2 mt-2 sm:mt-0">
                                 <Button
@@ -1018,7 +1141,15 @@ const ManageFamilies = ({ families, showConfirmation, currentUser }) => {
                     label="Highscore Visibility"
                     name="highscoreScope"
                     value={familyFormData.highscoreScope}
-                    onChange={handleFamilyFormChange} options={highscoreScopeOptions} />
+                    onChange={handleFamilyFormChange} options={highscoreScopeOptions}
+                />
+                {familyFormData.highscoreScope === 'group' && (
+                    <SelectField
+                        label="Select Highscore Group"
+                        name="highscoreGroupId"
+                        value={familyFormData.highscoreGroupId}
+                        onChange={handleFamilyFormChange} options={highscoreGroups} placeholder="-- Select a Group --" required />
+                )}
                 <Button onClick={handleSaveFamily} className="w-full bg-green-500 hover:bg-green-600">
                     {editingFamily ? "Save Changes" : "Create Family"}
                 </Button>
@@ -3170,6 +3301,7 @@ const KidHighscores = ({ currentKid, currentFamilyId }) => {
     const [isLoading, setIsLoading] = useState(true);
     const [error, setErrorMsg] = useState('');
     const [familyScope, setFamilyScope] = useState(null); // 'disabled', 'internal', 'global'
+    const [familyHighscoreGroupId, setFamilyHighscoreGroupId] = useState(null);
 
     useEffect(() => {
         const fetchFamilyScope = async () => {
@@ -3179,7 +3311,9 @@ const KidHighscores = ({ currentKid, currentFamilyId }) => {
                 const familyDocRef = doc(db, familiesCollectionPath, currentFamilyId);
                 const familyDocSnap = await getDoc(familyDocRef);
                 if (familyDocSnap.exists()) {
-                    setFamilyScope(familyDocSnap.data().highscoreScope || 'disabled');
+                    const familyData = familyDocSnap.data();
+                    setFamilyScope(familyData.highscoreScope || 'disabled');
+                    setFamilyHighscoreGroupId(familyData.highscoreGroupId || null);
                 } else {
                     setErrorMsg("Your family's settings could not be loaded.");
                     setFamilyScope('disabled');
@@ -3193,7 +3327,7 @@ const KidHighscores = ({ currentKid, currentFamilyId }) => {
         fetchFamilyScope();
     }, [currentFamilyId]);
 
-    useEffect(() => {
+useEffect(() => {
         if (!familyScope) {
             if (isLoading && !error) { /* only set loading if not already error */ }
             else { setIsLoading(false); }
@@ -3222,8 +3356,11 @@ const KidHighscores = ({ currentKid, currentFamilyId }) => {
                             isCurrentUser: kidDoc.id === currentKid.id
                         });
                     });
-                } else if (familyScope === 'global') {
-                    const participatingFamiliesQuery = query(collection(db, familiesCollectionPath), where("highscoreScope", "==", "global"));
+                } else if (familyScope === 'group' && familyHighscoreGroupId) {
+                    const participatingFamiliesQuery = query(
+                        collection(db, familiesCollectionPath),
+                        where("highscoreScope", "==", "group"),
+                        where("highscoreGroupId", "==", familyHighscoreGroupId));
                     const familiesSnap = await getDocs(participatingFamiliesQuery);
 
                     const kidFetchPromises = [];
@@ -3268,7 +3405,7 @@ const KidHighscores = ({ currentKid, currentFamilyId }) => {
         } else {
             setIsLoading(false); // Not loading if disabled
         }
-    }, [familyScope, currentFamilyId, currentKid.id, currentKid.authUid]); // Added currentKid.authUid
+    }, [familyScope, familyHighscoreGroupId, currentFamilyId, currentKid.id, currentKid.authUid]);
 
 
     if (isLoading) {
@@ -3297,7 +3434,7 @@ const KidHighscores = ({ currentKid, currentFamilyId }) => {
             </Card>
         );
     }
-    if (scores.length === 0 && (familyScope === 'internal' || familyScope === 'global')) {
+    if (scores.length === 0 && (familyScope === 'internal' || familyScope === 'group')) {
          return (
             <Card>
                 <h3 className="text-2xl font-semibold text-gray-700 mb-4">Highscores</h3>
@@ -3315,7 +3452,7 @@ const KidHighscores = ({ currentKid, currentFamilyId }) => {
                         <tr>
                             <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Rank</th>
                             <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Name</th>
-                            {familyScope === 'global' && (
+                            {(familyScope === 'group' || familyScope === 'global') && ( // Keep 'global' for potential future use or if old data exists
                                 <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Family</th>
                             )}
                             <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Total Points Earned</th>
@@ -3328,7 +3465,7 @@ const KidHighscores = ({ currentKid, currentFamilyId }) => {
                                 <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-900">
                                     {score.name} {score.isCurrentUser && <Star size={14} className="inline ml-1 text-yellow-500 fill-current" />}
                                 </td>
-                                {familyScope === 'global' && (
+                                {(familyScope === 'group' || familyScope === 'global') && (
                                     <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-500">{score.familyName}</td>
                                 )}
                                 <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-700">{score.points}</td>
