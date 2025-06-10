@@ -167,8 +167,8 @@ const ConfirmationModal = ({ isOpen, onClose, title, message, onConfirm, confirm
     if (!isOpen) return null;
     return (
         <Modal isOpen={isOpen} onClose={onClose} title={title} size="max-w-md">
-            <p className="text-gray-600 mb-6">{message}</p>
-            {children && <div className="mb-4">{children}</div>}
+            {message && <p className="text-gray-600 mb-6">{message}</p>}
+            {children && <div className="mb-4">{typeof children === 'function' ? children() : children}</div>}
             <div className="flex justify-end space-x-3">
                 <Button onClick={onClose} className="bg-gray-300 hover:bg-gray-400 text-gray-800" icon={null}>
                     {cancelText}
@@ -2448,16 +2448,8 @@ const FulfillRewards = ({ familyId, pendingRewards, kidsInFamily, allRewardsList
     const [cloneRewardOnFulfill, setCloneRewardOnFulfill] = useState(false);
     const [cancellationNote, setCancellationNote] = useState("");
 
-    const openFulfillModal = (redeemedReward) => {
-        setRewardToProcess(redeemedReward);
-        setCloneRewardOnFulfill(false); // Reset checkbox
-    };
-    const openCancelModal = (redeemedReward) => {
-        setRewardToProcess(redeemedReward);
-        setCancellationNote(""); // Reset note
-    };
     const closeModals = () => {
-        setRewardToProcess(null);
+        setRewardToProcess(null); // This is still useful for clearing after action
         setCloneRewardOnFulfill(false);
         setCancellationNote("");
     };
@@ -2465,12 +2457,10 @@ const FulfillRewards = ({ familyId, pendingRewards, kidsInFamily, allRewardsList
     const handleFulfill = async () => {
         if (!rewardToProcess) return;
         const originalRewardDetails = allRewardsList.find(r => r.id === rewardToProcess.rewardId);
-
-        showConfirmation(
-            "Confirm Fulfillment",
-            `Mark "${rewardToProcess.rewardName}" for ${kidsInFamily.find(k => k.id === rewardToProcess.kidId)?.name} as fulfilled?`,
-            async () => {
-                try {
+        // This is the core logic that will be passed to showConfirmation
+        const processRewardFulfillment = async () => {
+            if (!rewardToProcess) return; // Re-check, though should be set
+            try {
                     const batch = writeBatch(db);
                     const redeemedRewardRef = doc(db, getFamilyScopedCollectionPath(familyId, 'redeemedRewards'), rewardToProcess.id);
                     batch.update(redeemedRewardRef, {
@@ -2494,10 +2484,15 @@ const FulfillRewards = ({ familyId, pendingRewards, kidsInFamily, allRewardsList
                     closeModals();
                 } catch (error) {
                     console.error("Error fulfilling reward:", error);
+                    // Potentially show an error to the user via a state variable if needed
                 }
-            },
+        };
+
+        showConfirmation(
+            "Confirm Fulfillment",
+            `Mark "${rewardToProcess.rewardName}" for ${kidsInFamily.find(k => k.id === rewardToProcess.kidId)?.name} as fulfilled?`,
+            processRewardFulfillment,
             "Mark Fulfilled", // confirmText
-            // Children for confirmation modal
             <div>
                 <label className="flex items-center text-sm text-gray-700 mt-2">
                     <input
@@ -2514,11 +2509,10 @@ const FulfillRewards = ({ familyId, pendingRewards, kidsInFamily, allRewardsList
 
     const handleCancelRequest = async () => {
         if (!rewardToProcess) return;
-        showConfirmation(
-            "Cancel Reward Request",
-            `Cancel request for "${rewardToProcess.rewardName}" by ${kidsInFamily.find(k => k.id === rewardToProcess.kidId)?.name}? Points will be returned.`,
-            async () => {
-                try {
+        // This is the core logic for cancellation
+        const processRewardCancellation = async () => {
+            if (!rewardToProcess) return; // Re-check
+            try {
                     const batch = writeBatch(db);
                     const redeemedRewardRef = doc(db, getFamilyScopedCollectionPath(familyId, 'redeemedRewards'), rewardToProcess.id);
                     const kidRef = doc(db, getFamilyScopedCollectionPath(familyId, 'kids'), rewardToProcess.kidId);
@@ -2538,19 +2532,90 @@ const FulfillRewards = ({ familyId, pendingRewards, kidsInFamily, allRewardsList
                     closeModals();
                 } catch (error) {
                     console.error("Error cancelling reward request:", error);
+                    // Potentially show an error
                 }
-            },
+        };
+        showConfirmation(
+            "Cancel Reward Request",
+            `Cancel request for "${rewardToProcess.rewardName}" by ${kidsInFamily.find(k => k.id === rewardToProcess.kidId)?.name}? Points will be returned.`,
+            processRewardCancellation,
             "Yes, Cancel & Return Points", // confirmText
-            // Children for confirmation modal
-            <div>
-                <TextAreaField
-                    label="Reason for cancellation (optional):"
-                    value={cancellationNote}
-                    onChange={e => setCancellationNote(e.target.value)}
-                    placeholder="e.g., Item out of stock"
-                />
-            </div>
+            () => ( // Pass as a render function
+                <div>
+                    <TextAreaField
+                        label="Reason for cancellation (optional):"
+                        value={cancellationNote}
+                        onChange={e => setCancellationNote(e.target.value)}
+                        placeholder="e.g., Item out of stock"
+                    />
+                </div>
+            )
         );
+    };
+
+    // New trigger functions that will be called by the buttons in the list
+    const triggerFulfillConfirmation = (redeemedReward) => {
+        setRewardToProcess(redeemedReward);
+        setCloneRewardOnFulfill(false); // Reset for the modal
+
+        const processActualFulfillment = async () => {
+            if (!rewardToProcess) return; // Should be set by now from the outer scope
+            const originalRewardDetails = allRewardsList.find(r => r.id === rewardToProcess.rewardId);
+            try {
+                const batch = writeBatch(db);
+                const redeemedRewardRef = doc(db, getFamilyScopedCollectionPath(familyId, 'redeemedRewards'), rewardToProcess.id);
+                batch.update(redeemedRewardRef, {
+                    status: 'fulfilled',
+                    dateFulfilled: Timestamp.now(),
+                    fulfilledBy: firebaseUser ? (firebaseUser.displayName || firebaseUser.email || firebaseUser.uid) : 'System',
+                });
+
+                if (cloneRewardOnFulfill && originalRewardDetails) { // cloneRewardOnFulfill is from FulfillRewards state
+                    const newRewardData = { ...originalRewardDetails, createdAt: Timestamp.now(), isAvailable: true, };
+                    delete newRewardData.id;
+                    const newRewardRef = doc(collection(db, getFamilyScopedCollectionPath(familyId, 'rewards')));
+                    batch.set(newRewardRef, newRewardData);
+                }
+                await batch.commit();
+                closeModals();
+            } catch (error) { console.error("Error fulfilling reward:", error); }
+        };
+
+        showConfirmation("Confirm Fulfillment", `Mark "${redeemedReward.rewardName}" for ${kidsInFamily.find(k => k.id === redeemedReward.kidId)?.name} as fulfilled?`, processActualFulfillment, "Mark Fulfilled",
+            () => ( // Pass as a render function
+                <div>
+                    <label className="flex items-center text-sm text-gray-700 mt-2">
+                        <input type="checkbox" checked={cloneRewardOnFulfill} onChange={(e) => setCloneRewardOnFulfill(e.target.checked)} className="mr-2 h-4 w-4 text-indigo-600 border-gray-300 rounded focus:ring-indigo-500" />
+                        Re-list this reward for future redemption?
+                    </label>
+                </div>
+            )
+        );
+    };
+
+    const triggerCancelConfirmation = (redeemedReward) => {
+        setRewardToProcess(redeemedReward);
+        setCancellationNote(""); // Reset for the modal
+
+        const processActualCancellation = async () => {
+            if (!rewardToProcess) return;
+            try {
+                const batch = writeBatch(db);
+                const redeemedRewardRef = doc(db, getFamilyScopedCollectionPath(familyId, 'redeemedRewards'), rewardToProcess.id);
+                const kidRef = doc(db, getFamilyScopedCollectionPath(familyId, 'kids'), rewardToProcess.kidId);
+                const kidDoc = await getDoc(kidRef);
+                if (!kidDoc.exists()) throw new Error("Kid not found for point refund.");
+                const newPoints = (kidDoc.data().points || 0) + rewardToProcess.pointsSpent;
+                batch.update(redeemedRewardRef, { status: 'cancelled_by_parent', dateCancelled: Timestamp.now(), cancellationNote: cancellationNote.trim() || null, cancelledBy: firebaseUser ? (firebaseUser.displayName || firebaseUser.email || firebaseUser.uid) : 'System', });
+                batch.update(kidRef, { points: newPoints });
+                await batch.commit();
+                closeModals();
+            } catch (error) { console.error("Error cancelling reward request:", error); }
+        };        
+        showConfirmation("Cancel Reward Request", `Cancel request for "${redeemedReward.rewardName}" by ${kidsInFamily.find(k => k.id === redeemedReward.kidId)?.name}? Points will be returned.`, processActualCancellation, "Yes, Cancel & Return Points", 
+            () => ( // Pass as a render function
+                <div><TextAreaField label="Reason for cancellation (optional):" value={cancellationNote} onChange={e => setCancellationNote(e.target.value)} placeholder="e.g., Item out of stock" /></div>
+            ));
     };
 
     if (pendingRewards.length === 0) {
@@ -2585,10 +2650,10 @@ const FulfillRewards = ({ familyId, pendingRewards, kidsInFamily, allRewardsList
                                     )}
                                 </div>
                                 <div className="flex space-x-2 mt-2 sm:mt-0">
-                                    <Button onClick={() => openCancelModal(rr)} className="bg-red-500 hover:bg-red-600 text-sm" icon={PackageX}>
+                                    <Button onClick={() => triggerCancelConfirmation(rr)} className="bg-red-500 hover:bg-red-600 text-sm" icon={PackageX}>
                                         Cancel
                                     </Button>
-                                    <Button onClick={() => openFulfillModal(rr)} className="bg-green-500 hover:bg-green-600 text-sm" icon={PackageCheck}>
+                                    <Button onClick={() => triggerFulfillConfirmation(rr)} className="bg-green-500 hover:bg-green-600 text-sm" icon={PackageCheck}>
                                         Fulfill
                                     </Button>
                                 </div>
@@ -2778,8 +2843,8 @@ const KidDashboard = ({ kidData, familyId, allTasks, rewards, completedTasks, re
     const renderContent = () => {
         switch (activeTab) {
             case 'profile': return <KidProfile kid={kid} pointsToday={pointsToday} pointsThisWeek={pointsThisWeek} pointsThisMonth={pointsThisMonth} pendingPoints={pendingPoints} />;
-            case 'tasks': return <KidTasksList kid={kid} familyId={familyId} allTasks={allTasks} completedTasks={completedTasks} showConfirmation={showConfirmation} />;
-            case 'rewards': return <KidRewardsList kid={kid} familyId={familyId} rewards={rewards} showConfirmation={showConfirmation} />;
+            case 'tasks': return <KidTasksList kid={kid} familyId={familyId} allTasks={allTasks} completedTasks={completedTasks} redeemedRewardsData={redeemedRewardsData} showConfirmation={showConfirmation} />;
+            case 'rewards': return <KidRewardsList kid={kid} familyId={familyId} rewards={rewards} redeemedRewardsData={redeemedRewardsData} showConfirmation={showConfirmation} />;
             case 'history': return <KidHistory kid={kid} familyId={familyId} completedTasks={completedTasks} redeemedRewards={redeemedRewardsData} />;
             case 'highscores': return <KidHighscores currentKid={kid} currentFamilyId={familyId} />;
             default: return <KidProfile kid={kid} pointsToday={pointsToday} pointsThisWeek={pointsThisWeek} pointsThisMonth={pointsThisMonth} pendingPoints={pendingPoints} />;
@@ -3126,7 +3191,7 @@ const KidTasksList = ({ kid, familyId, allTasks, completedTasks, showConfirmatio
 
 
 // --- Kid Rewards List ---
-const KidRewardsList = ({ kid, familyId, rewards, showConfirmation }) => {
+const KidRewardsList = ({ kid, familyId, rewards, redeemedRewardsData, showConfirmation }) => {
     const [showFeedback, setShowFeedback] = useState('');
     const [feedbackType, setFeedbackType] = useState('info'); // 'info', 'success', 'error'
     const [rewardToRedeem, setRewardToRedeem] = useState(null); // Store the reward object
@@ -3195,7 +3260,18 @@ const KidRewardsList = ({ kid, familyId, rewards, showConfirmation }) => {
         }
     };
 
-    const availableRewards = rewards.filter(r => r.isAvailable);
+    const availableRewards = rewards.filter(r => {
+        if (!r.isAvailable) {
+            return false;
+        }
+        // Check if this reward has been redeemed by the kid and is not cancelled
+        const existingRedemption = redeemedRewardsData.find(redeemed =>
+            redeemed.kidId === kid.id &&
+            redeemed.rewardId === r.id &&
+            (redeemed.status === 'pending_fulfillment' || redeemed.status === 'fulfilled')
+        );
+        return !existingRedemption; // Only available if no such active (non-cancelled) redemption exists
+    });
 
     const feedbackColor = {
         info: 'bg-blue-100 text-blue-700',
