@@ -351,7 +351,7 @@ function App() {
     const [confirmModalState, setConfirmModalState] = useState({
         isOpen: false, title: '', message: '', onConfirm: () => { }, children: null,
         modalUiState: {}, // New: state for UI elements within the modal children
-        _setModalUiStateDirectly: () => {} // New: internal updater
+        _setModalUiStateDirectly: () => { } // New: internal updater
     });
 
     const showConfirmation = (
@@ -843,7 +843,7 @@ const AdminSection = ({ user, families, showConfirmation, switchToFamilyView, mi
     const adminNavItems = [
         { name: 'manageFamilies', icon: Building, label: "Manage Families" },
         { name: 'manageFamilyParents', icon: UserCog, label: "Manage Family Parents" },
-        { name: 'manageHighscoreGroups', icon: UsersRound, label: "Highscore Groups"},
+        { name: 'manageHighscoreGroups', icon: UsersRound, label: "Highscore Groups" },
     ];
 
     const parentRoles = user.familyRoles?.filter(r => r.role === 'parent') || [];
@@ -1325,7 +1325,7 @@ const ParentDashboard = ({ user, familyId, kids, tasks, rewards, completedTasks,
         switch (activeTab) {
             case 'kids': return <ManageKids parentUser={user} familyId={familyId} kidsInFamily={kids} completedTasks={completedTasks} showConfirmation={showConfirmation} />;
             case 'tasks': return <ManageTasks familyId={familyId} tasksInFamily={tasks} kidsInFamily={kids} completedTasks={completedTasks} showConfirmation={showConfirmation} />;
-            case 'rewards': return <ManageRewards familyId={familyId} rewardsInFamily={rewards} showConfirmation={showConfirmation} />;
+            case 'rewards': return <ManageRewards familyId={familyId} rewardsInFamily={rewards} allRedeemedRewardInstances={redeemedRewardsData} showConfirmation={showConfirmation} />;
             case 'approveTasks': return <ApproveTasks familyId={familyId} pendingTasks={pendingTasks} kidsInFamily={kids} allTasksInFamily={tasks} showConfirmation={showConfirmation} firebaseUser={user} />;
             case 'fulfillRewards': return <FulfillRewards familyId={familyId} pendingRewards={pendingFulfillmentRewards} kidsInFamily={kids} allRewardsList={rewards} showConfirmation={showConfirmation} firebaseUser={user} />;
             case 'history': return <ParentRewardHistory familyId={familyId} redeemedRewards={redeemedRewardsData} completedTasks={completedTasks} kidsInFamily={kids} rewardsInFamily={rewards} tasksInFamily={tasks} />;
@@ -1630,11 +1630,11 @@ const ManageTasks = ({ familyId, tasksInFamily, kidsInFamily, completedTasks, sh
     const today = useMemo(() => getStartOfDay(new Date()), []);
     const todayDateStringForForm = useMemo(() => new Date().toISOString().split('T')[0], []);
     const initialFormState = {
-        name: '', 
-        points: '1', 
-        recurrenceType: 'none', 
+        name: '',
+        points: '1',
+        recurrenceType: 'none',
         daysOfWeek: [],
-        startDate: new Date().toISOString().split('T')[0], 
+        startDate: new Date().toISOString().split('T')[0],
         customDueDate: new Date().toISOString().split('T')[0], // Default customDueDate to today initially
         assignedKidId: '',
     };
@@ -1644,7 +1644,7 @@ const ManageTasks = ({ familyId, tasksInFamily, kidsInFamily, completedTasks, sh
         { value: 'none', label: 'None (One-time or specific due date)' },
         { value: 'daily', label: 'Daily' }, { value: 'weekly', label: 'Weekly' },
         { value: 'monthly', label: 'Monthly (based on start date)' },
-        { value: 'immediately', label: 'Immediately (Clones on Approval)'}
+        { value: 'immediately', label: 'Immediately (Clones on Approval)' }
     ];
     const kidOptions = [
         ...kidsInFamily.map(k => ({ value: k.id, label: k.name })) // Removed the explicit unassigned option here
@@ -1703,8 +1703,8 @@ const ManageTasks = ({ familyId, tasksInFamily, kidsInFamily, completedTasks, sh
 
     const openAddModal = () => {
         setEditingTask(null);
-        setFormData({ 
-            ...initialFormState, 
+        setFormData({
+            ...initialFormState,
             startDate: todayDateStringForForm,
             customDueDate: todayDateStringForForm
         });
@@ -1749,8 +1749,8 @@ const ManageTasks = ({ familyId, tasksInFamily, kidsInFamily, completedTasks, sh
         if (formData.recurrenceType === 'weekly' && formData.daysOfWeek.length === 0) {
             setFormError('Please select at least one day for weekly recurrence.'); return;
         }
-        if (!formData.startDate) { 
-            setFormError('Start date is required.'); return; 
+        if (!formData.startDate) {
+            setFormError('Start date is required.'); return;
         }
         // For 'none' or 'immediately' tasks, a specific Due Date is mandatory.
         if ((formData.recurrenceType === 'none' || formData.recurrenceType === 'immediately') && !formData.customDueDate) {
@@ -1783,7 +1783,7 @@ const ManageTasks = ({ familyId, tasksInFamily, kidsInFamily, completedTasks, sh
             if (taskData.recurrenceType !== 'none' && taskData.recurrenceType !== 'immediately') {
                 const baseDateForCalc = new Date(taskData.startDate + 'T00:00:00');
                 // Pass a task object without customDueDate to ensure the calculation uses the pattern.
-                const tempTaskForCalc = {...taskData, customDueDate: null};
+                const tempTaskForCalc = { ...taskData, customDueDate: null };
                 taskData.nextDueDate = calculateNextDueDate(tempTaskForCalc, baseDateForCalc);
             }
         }
@@ -1855,7 +1855,7 @@ const ManageTasks = ({ familyId, tasksInFamily, kidsInFamily, completedTasks, sh
         });
 
         if (sortConfig.key !== null) {
-            processedTasks.sort((a,b) => {
+            processedTasks.sort((a, b) => {
                 let valA = a[sortConfig.key];
                 let valB = b[sortConfig.key];
 
@@ -1893,12 +1893,12 @@ const ManageTasks = ({ familyId, tasksInFamily, kidsInFamily, completedTasks, sh
                     {showDoneTaskInstances ? "Completed Task Instances" : "Manage Tasks"}
                 </h3>
                 <div className="flex flex-wrap items-center gap-1 sm:gap-2">
-                     <Button onClick={() => setShowDoneTaskInstances(!showDoneTaskInstances)}
+                    <Button onClick={() => setShowDoneTaskInstances(!showDoneTaskInstances)}
                         className={`text-xs sm:text-sm px-2 sm:px-3 py-1 ${showDoneTaskInstances ? 'bg-gray-300 hover:bg-gray-400 text-gray-800' : 'bg-gray-200 hover:bg-gray-300 text-gray-700'}`}
                         icon={showDoneTaskInstances ? EyeIcon : EyeOff}>
                         {showDoneTaskInstances ? "Show Active" : "Show Done"}
                     </Button>
-                     {/* Changed default sort to 'effectiveDate' which considers nextDueDate or customDueDate */}
+                    {/* Changed default sort to 'effectiveDate' which considers nextDueDate or customDueDate */}
                     <Button
                         onClick={() => requestSort('effectiveDate')}
                         className="bg-yellow-200 hover:bg-yellow-300 text-yellow-800 font-medium px-2 sm:px-3 py-1 text-xs sm:text-sm"
@@ -1963,7 +1963,8 @@ const ManageTasks = ({ familyId, tasksInFamily, kidsInFamily, completedTasks, sh
                                         </span>
                                     );
                                 } else { // Due further out, or daily task due soon, or other cases
-                                    dueDateDisplayContent = formatTaskDueDate(task.taskSpecificDueDate); }
+                                    dueDateDisplayContent = formatTaskDueDate(task.taskSpecificDueDate);
+                                }
                             }
                         } else {
                             dueDateDisplayContent = `Starts: ${formatShortDate(task.startDate ? new Date(task.startDate + 'T00:00:00') : null)}`;
@@ -2049,10 +2050,11 @@ const ManageTasks = ({ familyId, tasksInFamily, kidsInFamily, completedTasks, sh
 };
 
 // --- Manage Rewards (Parent) ---
-const ManageRewards = ({ familyId, rewardsInFamily, showConfirmation }) => {
+const ManageRewards = ({ familyId, rewardsInFamily, allRedeemedRewardInstances, showConfirmation }) => {
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [rewardName, setRewardName] = useState('');
     const [rewardCost, setRewardCost] = useState('');
+    const [rewardIsAvailable, setRewardIsAvailable] = useState(true); // For the modal form
     const [formError, setFormError] = useState('');
     const [editingReward, setEditingReward] = useState(null);
     const [sortConfig, setSortConfig] = useState({ key: 'pointCost', direction: 'descending' });
@@ -2068,14 +2070,13 @@ const ManageRewards = ({ familyId, rewardsInFamily, showConfirmation }) => {
             const rewardData = {
                 name: rewardName.trim(),
                 pointCost: parseInt(rewardCost),
+                isAvailable: rewardIsAvailable, // Use state from form
             };
 
             if (editingReward) {
                 rewardData.updatedAt = Timestamp.now();
-                rewardData.isAvailable = typeof editingReward.isAvailable === 'boolean' ? editingReward.isAvailable : true;
                 await updateDoc(doc(db, rewardsPath, editingReward.id), rewardData);
             } else {
-                rewardData.isAvailable = true;
                 rewardData.createdAt = Timestamp.now();
                 await addDoc(collection(db, rewardsPath), rewardData);
             }
@@ -2083,6 +2084,7 @@ const ManageRewards = ({ familyId, rewardsInFamily, showConfirmation }) => {
             setRewardCost('');
             setEditingReward(null);
             setIsModalOpen(false);
+            setRewardIsAvailable(true); // Reset for next modal opening
         } catch (error) {
             console.error("Error adding reward: ", error);
             setFormError("Failed to add reward.");
@@ -2093,6 +2095,7 @@ const ManageRewards = ({ familyId, rewardsInFamily, showConfirmation }) => {
         setEditingReward(null);
         setRewardName('');
         setRewardCost('');
+        setRewardIsAvailable(true); // Default for new reward
         setFormError('');
         setIsModalOpen(true);
     };
@@ -2101,6 +2104,7 @@ const ManageRewards = ({ familyId, rewardsInFamily, showConfirmation }) => {
         setEditingReward(reward);
         setRewardName(reward.name);
         setRewardCost(reward.pointCost.toString());
+        setRewardIsAvailable(reward.isAvailable !== false); // Set based on existing reward
         setFormError('');
         setIsModalOpen(true);
     };
@@ -2109,9 +2113,7 @@ const ManageRewards = ({ familyId, rewardsInFamily, showConfirmation }) => {
         setEditingReward(null); // Ensure it's a new reward
         setRewardName(`Copy of ${rewardToClone.name}`);
         setRewardCost(rewardToClone.pointCost.toString());
-        // Retain isAvailable status from the cloned item, or default to true
-        // For a new clone, it should probably default to available.
-        // The original handleSaveOrUpdateReward sets isAvailable = true for new.
+        setRewardIsAvailable(rewardToClone.isAvailable !== false); // Clone availability
         setFormError('');
         setIsModalOpen(true);
     };
@@ -2136,10 +2138,21 @@ const ManageRewards = ({ familyId, rewardsInFamily, showConfirmation }) => {
         }
     };
 
+    // Filter based on usage history:
+    // true = show rewards that have NOT been redeemed or fulfilled yet.
+    // false = show rewards that HAVE been redeemed or fulfilled at least once.
+    const [showUnusedRewards, setShowUnusedRewards] = useState(true);
+
     const sortedRewards = useMemo(() => {
-        let sortableItems = [...rewardsInFamily];
+        let filteredRewards = rewardsInFamily.filter(rewardDef => {
+            const hasBeenUsed = allRedeemedRewardInstances.some(
+                rr => rr.rewardId === rewardDef.id &&
+                      (rr.status === 'pending_fulfillment' || rr.status === 'fulfilled')
+            );
+            return showUnusedRewards ? !hasBeenUsed : hasBeenUsed;
+        });
         if (sortConfig.key) {
-            sortableItems.sort((a, b) => {
+            filteredRewards.sort((a, b) => {
                 let valA = a[sortConfig.key];
                 let valB = b[sortConfig.key];
                 if (sortConfig.key === 'createdAt' && valA?.toDate && valB?.toDate) {
@@ -2151,8 +2164,8 @@ const ManageRewards = ({ familyId, rewardsInFamily, showConfirmation }) => {
                 return 0;
             });
         }
-        return sortableItems;
-    }, [rewardsInFamily, sortConfig]);
+        return filteredRewards;
+    }, [rewardsInFamily, allRedeemedRewardInstances, sortConfig, showUnusedRewards]);
 
     const requestSort = (key) => {
         let direction = 'ascending';
@@ -2171,9 +2184,18 @@ const ManageRewards = ({ familyId, rewardsInFamily, showConfirmation }) => {
 
     return (
         <Card>
-            <div className="flex flex-col sm:flex-row justify-between items-center mb-6 gap-2">
-                <h3 className="text-2xl font-semibold text-gray-700">Rewards</h3>
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 gap-2">
+                <h3 className="text-2xl font-semibold text-gray-700 capitalize">
+                    {showUnusedRewards ? "Availabe Rewards" : "Redeemed/Fulfilled Rewards"}
+                </h3>
                 <div className="flex flex-wrap items-center gap-1 sm:gap-2">
+                    <Button
+                        onClick={() => setShowUnusedRewards(!showUnusedRewards)}
+                        className="bg-gray-200 hover:bg-gray-300 text-gray-700 font-medium px-2 sm:px-3 py-1 text-xs sm:text-sm"
+                        icon={showUnusedRewards ? EyeIcon : EyeOff} // Icon shows state if clicked
+                    >
+                        {showUnusedRewards ? "Show Used" : "Show Unused"}
+                    </Button>
                     <Button
                         onClick={() => requestSort('name')}
                         className="bg-yellow-200 hover:bg-yellow-300 text-yellow-800 font-medium px-2 sm:px-3 py-1 text-xs sm:text-sm"
@@ -2199,13 +2221,22 @@ const ManageRewards = ({ familyId, rewardsInFamily, showConfirmation }) => {
                 </div>
             </div>
             {sortedRewards.length === 0 ? (
-                <p className="text-gray-500">No rewards defined yet for this family.</p>
+                <p className="text-gray-500">
+                    {showUnusedRewards
+                        ? "No reward templates are currently unused (all have redemption history or none exist)."
+                        : "No reward templates have been used yet, or no reward templates match this filter."}
+                </p>
             ) : (
                 <ul className="space-y-3">
                     {sortedRewards.map(reward => (
                         <li key={reward.id} className="flex flex-col sm:flex-row justify-between sm:items-center p-4 bg-gray-50 rounded-lg shadow-sm">
                             <div>
                                 <span className="font-medium text-lg text-gray-800">{reward.name}</span>
+                                {!reward.isAvailable && (
+                                    <span className="ml-2 px-2 py-0.5 bg-gray-200 text-gray-600 text-xs rounded-full">
+                                        Inactive
+                                    </span>
+                                )}
                                 <span className="ml-4 text-sm text-yellow-700 font-semibold">{reward.pointCost} points</span>
                             </div>
                             <div className="flex space-x-1 sm:space-x-2 mt-2 sm:mt-0">
@@ -2216,7 +2247,7 @@ const ManageRewards = ({ familyId, rewardsInFamily, showConfirmation }) => {
                                     title="Clone Reward"
                                 >
                                     <span className="hidden sm:inline">Clone</span>
-+                                </Button>
+                                    +                                </Button>
                                 <Button
                                     onClick={() => openEditModal(reward)}
                                     className="bg-blue-500 hover:bg-blue-600 px-2 sm:px-3 py-1 text-sm"
@@ -2240,12 +2271,23 @@ const ManageRewards = ({ familyId, rewardsInFamily, showConfirmation }) => {
             )}
             <Modal
                 isOpen={isModalOpen}
-                onClose={() => { setIsModalOpen(false); setFormError(''); setEditingReward(null); }}
+                onClose={() => { setIsModalOpen(false); setFormError(''); setEditingReward(null); setRewardIsAvailable(true); }}
                 title={editingReward ? "Edit Reward" : "Add New Reward"}
             >
                 {formError && <p className="text-red-500 text-sm mb-3">{formError}</p>}
                 <InputField label="Reward Name" value={rewardName} onChange={e => setRewardName(e.target.value)} placeholder="e.g., Extra screen time" required />
                 <InputField label="Point Cost" type="number" value={rewardCost} onChange={e => setRewardCost(e.target.value)} placeholder="e.g., 50" required min="1" />
+                <div className="mb-4">
+                    <label className="flex items-center">
+                        <input
+                            type="checkbox"
+                            checked={rewardIsAvailable}
+                            onChange={e => setRewardIsAvailable(e.target.checked)}
+                            className="mr-2 h-4 w-4 text-indigo-600 border-gray-300 rounded focus:ring-indigo-500"
+                        />
+                        <span className="text-sm font-medium text-gray-700">Available for Redemption</span>
+                    </label>
+                </div>
                 <Button onClick={handleSaveOrUpdateReward} className="w-full bg-yellow-500 hover:bg-yellow-600">
                     {editingReward ? "Save Changes" : "Add Reward"}
                 </Button>
@@ -2927,7 +2969,7 @@ const KidTasksList = ({ kid, familyId, allTasks, completedTasks, showConfirmatio
                     }
                     return false; // Otherwise, if no nextDueDate, don't show
                 }
-                
+
                 // Check if already submitted or approved for this specific next due date
                 const submittedOrApprovedForThisDueDate = completedTasks.find(ct =>
                     ct.taskId === task.id &&
@@ -2945,10 +2987,10 @@ const KidTasksList = ({ kid, familyId, allTasks, completedTasks, showConfirmatio
                     const isDueToday = nextDueDate.getTime() === today.getTime();
                     // For 'today' view, also consider if the task's startDate is today for recurring tasks.
                     const startsTodayAndIsTodayView = (taskViewPeriod === 'today' && task.startDate && getStartOfDay(new Date(task.startDate)).getTime() === today.getTime());
-                    
+
                     const isInPeriod = (taskViewPeriod === 'today' && (isDueToday || startsTodayAndIsTodayView)) ||
-                                       (taskViewPeriod === 'week' && nextDueDate >= weekStart && nextDueDate <= weekEnd);
-                    
+                        (taskViewPeriod === 'week' && nextDueDate >= weekStart && nextDueDate <= weekEnd);
+
                     return isOverdue || isDueToday || isInPeriod;
                 }
             }
@@ -3422,7 +3464,7 @@ const KidHighscores = ({ currentKid, currentFamilyId }) => {
         fetchFamilyScope();
     }, [currentFamilyId]);
 
-useEffect(() => {
+    useEffect(() => {
         if (!familyScope) {
             if (isLoading && !error) { /* only set loading if not already error */ }
             else { setIsLoading(false); }
@@ -3530,7 +3572,7 @@ useEffect(() => {
         );
     }
     if (scores.length === 0 && (familyScope === 'internal' || familyScope === 'group')) {
-         return (
+        return (
             <Card>
                 <h3 className="text-2xl font-semibold text-gray-700 mb-4">Highscores</h3>
                 <p className="text-gray-600">No scores to display yet. Keep earning points!</p>
