@@ -2283,23 +2283,32 @@ const ApproveTasks = ({ familyId, pendingTasks, kidsInFamily, allTasksInFamily, 
 
                     // Handle "Immediately" task cloning
                     if (mainTaskData.recurrenceType === 'immediately') {
-                        const todayStr = new Date().toISOString().split('T')[0];
+                        const originalStartDateObj = new Date(mainTaskData.startDate + 'T00:00:00');
+                        // 'immediately' tasks should have a customDueDate set from the form.
+                        // Fallback to startDate if customDueDate is missing, though form validation should prevent this.
+                        const originalCustomDueDateObj = mainTaskData.customDueDate
+                            ? new Date(mainTaskData.customDueDate + 'T00:00:00')
+                            : originalStartDateObj;
+
+                        const diffInMilliseconds = originalCustomDueDateObj.getTime() - originalStartDateObj.getTime();
+
+                        const newClonedStartDate = getStartOfDay(new Date()); // New instance starts today
+
+                        // Calculate new custom due date by adding the original difference
+                        const newClonedCustomDueDate = new Date(newClonedStartDate.getTime() + diffInMilliseconds);
+
                         const clonedTaskData = {
                             ...mainTaskData, // Clone most fields
                             name: mainTaskData.name, // Or add a suffix like "(Auto-cloned)"
-                            startDate: todayStr,
-                            customDueDate: todayStr,
+                            startDate: newClonedStartDate.toISOString().split('T')[0],
+                            customDueDate: newClonedCustomDueDate.toISOString().split('T')[0],
                             createdAt: Timestamp.now(),
-                            // isActive: true, // Already part of mainTaskData
-                            // daysOfWeek: [], // Already part of mainTaskData if it was 'immediately'
                         };
                         delete clonedTaskData.id; // Remove original ID
                         delete clonedTaskData.nextDueDate; // Will be recalculated
 
-                        const newClonedTaskNextDueDate = calculateNextDueDate(
-                            { ...clonedTaskData, startDate: new Date(clonedTaskData.startDate), customDueDate: new Date(clonedTaskData.customDueDate) },
-                            getStartOfDay(new Date(clonedTaskData.customDueDate))
-                        );
+                        // Recalculate nextDueDate for the cloned task based on its new customDueDate
+                        const newClonedTaskNextDueDate = calculateNextDueDate(clonedTaskData, getStartOfDay(newClonedCustomDueDate));
                         clonedTaskData.nextDueDate = newClonedTaskNextDueDate;
 
                         const newClonedTaskRef = doc(collection(db, getFamilyScopedCollectionPath(familyId, 'tasks')));
