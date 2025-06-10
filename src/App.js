@@ -100,7 +100,7 @@ const formatTaskDueDate = (dateInput) => {
 const DAYS_OF_WEEK = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
 const DAY_LABELS_SHORT = ["Su", "M", "Tu", "W", "Th", "F", "Sa"];
 const calculateNextDueDate = (task, fromDateInput = new Date()) => {
-    const fromDate = getStartOfDay(new Date(fromDateInput)); if (!task.recurrenceType || task.recurrenceType === 'none') { return task.customDueDate ? Timestamp.fromDate(getStartOfDay(new Date(task.customDueDate))) : null; } let startDate = task.startDate ? getStartOfDay(new Date(task.startDate)) : getStartOfDay(new Date()); let candidateDate = new Date(Math.max(fromDate.getTime(), startDate.getTime())); if (task.nextDueDate && task.nextDueDate.toDate) { const currentNextDue = getStartOfDay(task.nextDueDate.toDate()); if (currentNextDue >= fromDate && currentNextDue >= startDate) { candidateDate = new Date(currentNextDue); } } if (candidateDate < startDate) candidateDate = new Date(startDate); switch (task.recurrenceType) {
+    const fromDate = getStartOfDay(new Date(fromDateInput)); if (!task.recurrenceType || task.recurrenceType === 'none' || task.recurrenceType === 'immediately') { return task.customDueDate ? Timestamp.fromDate(getStartOfDay(new Date(task.customDueDate))) : null; } let startDate = task.startDate ? getStartOfDay(new Date(task.startDate)) : getStartOfDay(new Date()); let candidateDate = new Date(Math.max(fromDate.getTime(), startDate.getTime())); if (task.nextDueDate && task.nextDueDate.toDate) { const currentNextDue = getStartOfDay(task.nextDueDate.toDate()); if (currentNextDue >= fromDate && currentNextDue >= startDate) { candidateDate = new Date(currentNextDue); } } if (candidateDate < startDate) candidateDate = new Date(startDate); switch (task.recurrenceType) {
         case 'daily': if (candidateDate <= fromDate) candidateDate.setDate(candidateDate.getDate() + 1); if (candidateDate < startDate) candidateDate = new Date(startDate); break; case 'weekly': if (!task.daysOfWeek || task.daysOfWeek.length === 0) return null; const selectedDayIndexes = task.daysOfWeek.map(day => DAYS_OF_WEEK.indexOf(day)).sort((a, b) => a - b); if (selectedDayIndexes.length === 0) return null; let attempts = 0; const currentDayOfCandidate = candidateDate.getDay(); if (candidateDate <= fromDate && !(selectedDayIndexes.includes(currentDayOfCandidate) && candidateDate.getTime() === fromDate.getTime())) { candidateDate.setDate(candidateDate.getDate() + 1); } if (candidateDate < startDate) candidateDate = new Date(startDate); while (attempts < 14) {
             const dayOfWeek = candidateDate.getDay(); for (const selectedDay of selectedDayIndexes) {
                 if (selectedDay >= dayOfWeek) {
@@ -1589,10 +1589,11 @@ const ManageTasks = ({ familyId, tasksInFamily, kidsInFamily, completedTasks, sh
     const [formError, setFormError] = useState('');
     const [sortConfig, setSortConfig] = useState({ key: 'effectiveDate', direction: 'ascending' });
 
-    
+
     const [showDoneTaskInstances, setShowDoneTaskInstances] = useState(false);
 
     const today = useMemo(() => getStartOfDay(new Date()), []);
+    const todayDateStringForForm = useMemo(() => new Date().toISOString().split('T')[0], []);
     const initialFormState = {
         name: '', 
         points: '1', 
@@ -1600,14 +1601,15 @@ const ManageTasks = ({ familyId, tasksInFamily, kidsInFamily, completedTasks, sh
         daysOfWeek: [],
         startDate: new Date().toISOString().split('T')[0], 
         customDueDate: new Date().toISOString().split('T')[0], // Default customDueDate to today initially
-        assignedKidId: ''
+        assignedKidId: '',
     };
     const [formData, setFormData] = useState(initialFormState);
 
     const recurrenceOptions = [
         { value: 'none', label: 'None (One-time or specific due date)' },
         { value: 'daily', label: 'Daily' }, { value: 'weekly', label: 'Weekly' },
-        { value: 'monthly', label: 'Monthly (based on start date)' }
+        { value: 'monthly', label: 'Monthly (based on start date)' },
+        { value: 'immediately', label: 'Immediately (Clones on Approval)'}
     ];
     const kidOptions = [
         ...kidsInFamily.map(k => ({ value: k.id, label: k.name })) // Removed the explicit unassigned option here
@@ -1625,10 +1627,10 @@ const ManageTasks = ({ familyId, tasksInFamily, kidsInFamily, completedTasks, sh
                 }
             }
             // Scenario 1.b: Start Date changes, and it's a non-recurring task.
-            // Auto-set customDueDate if it's empty or before the new startDate.
+            // Auto-set customDueDate if it's empty or before the new startDate for 'none' or 'immediately'.
             // Or if customDueDate is not set to something validly after/on the new startDate
-            if (name === "startDate" && newState.recurrenceType === "none") {
-                // Always set customDueDate to the new startDate if startDate changes for a non-recurring task
+            if (name === "startDate" && (newState.recurrenceType === "none" || newState.recurrenceType === "immediately")) {
+                // Always set customDueDate to the new startDate if startDate changes for these task types
                 // unless customDueDate is already explicitly set by the user to be later.
                 if (!newState.customDueDate || new Date(newState.customDueDate) < new Date(value) || newState.customDueDate === prev.customDueDate) {
                     newState.customDueDate = value;
@@ -1645,10 +1647,10 @@ const ManageTasks = ({ familyId, tasksInFamily, kidsInFamily, completedTasks, sh
             if (name === "recurrenceType" && value !== "weekly") {
                 newState.daysOfWeek = [];
             }
-            // Scenario 3: Recurrence type changes TO "none".
+            // Scenario 3: Recurrence type changes TO "none" or "immediately".
             // If customDueDate is empty or before startDate, set it to startDate.
-            if (name === "recurrenceType" && value === "none" && newState.startDate) {
-                if (!newState.customDueDate || new Date(newState.customDueDate) < new Date(newState.startDate)) {
+            if (name === "recurrenceType" && (value === "none" || value === "immediately")) {
+                if (newState.startDate && (!newState.customDueDate || new Date(newState.customDueDate) < new Date(newState.startDate))) {
                     newState.customDueDate = newState.startDate;
                 }
                 newState.daysOfWeek = [];
@@ -1666,11 +1668,11 @@ const ManageTasks = ({ familyId, tasksInFamily, kidsInFamily, completedTasks, sh
 
     const openAddModal = () => {
         setEditingTask(null);
-        const todayDateString = new Date().toISOString().split('T')[0];
         setFormData({ 
             ...initialFormState, 
-            startDate: todayDateString, 
-            customDueDate: todayDateString }); // Ensure customDueDate also defaults to today for new tasks
+            startDate: todayDateStringForForm,
+            customDueDate: todayDateStringForForm
+        });
         setFormError('');
         setIsModalOpen(true);
     };
@@ -1683,7 +1685,7 @@ const ManageTasks = ({ familyId, tasksInFamily, kidsInFamily, completedTasks, sh
             recurrenceType: task.recurrenceType || 'none',
             daysOfWeek: task.daysOfWeek || [],
             startDate: task.startDate ? new Date(task.startDate + 'T00:00:00').toISOString().split('T')[0] : new Date().toISOString().split('T')[0],
-            customDueDate: task.customDueDate ? new Date(task.customDueDate + 'T00:00:00').toISOString().split('T')[0] : '',
+            customDueDate: task.customDueDate ? new Date(task.customDueDate + 'T00:00:00').toISOString().split('T')[0] : (task.recurrenceType === 'immediately' ? (task.startDate ? new Date(task.startDate + 'T00:00:00').toISOString().split('T')[0] : todayDateStringForForm) : ''),
             assignedKidId: task.assignedKidId || '',
         });
         setFormError('');
@@ -1698,7 +1700,7 @@ const ManageTasks = ({ familyId, tasksInFamily, kidsInFamily, completedTasks, sh
             recurrenceType: taskToClone.recurrenceType || 'none',
             daysOfWeek: taskToClone.daysOfWeek || [],
             startDate: taskToClone.startDate ? new Date(taskToClone.startDate + 'T00:00:00').toISOString().split('T')[0] : new Date().toISOString().split('T')[0],
-            customDueDate: taskToClone.customDueDate ? new Date(taskToClone.customDueDate + 'T00:00:00').toISOString().split('T')[0] : '',
+            customDueDate: taskToClone.customDueDate ? new Date(taskToClone.customDueDate + 'T00:00:00').toISOString().split('T')[0] : (taskToClone.recurrenceType === 'immediately' ? (taskToClone.startDate ? new Date(taskToClone.startDate + 'T00:00:00').toISOString().split('T')[0] : todayDateStringForForm) : ''),
             assignedKidId: taskToClone.assignedKidId || '',
         });
         setFormError('');
@@ -1713,8 +1715,8 @@ const ManageTasks = ({ familyId, tasksInFamily, kidsInFamily, completedTasks, sh
             setFormError('Please select at least one day for weekly recurrence.'); return;
         }
         if (!formData.startDate) { setFormError('Start date is required.'); return; }
-        if (formData.recurrenceType === 'none' && !formData.customDueDate) {
-            setFormError('For non-recurring tasks, a specific Due Date is required.'); return;
+        if ((formData.recurrenceType === 'none' || formData.recurrenceType === 'immediately') && !formData.customDueDate) {
+            setFormError('For this recurrence type, a Due Date is required.'); return;
         }
         if (formData.customDueDate && new Date(formData.customDueDate) < new Date(formData.startDate)) {
             setFormError('Due date cannot be before start date.'); return;
@@ -1727,12 +1729,12 @@ const ManageTasks = ({ familyId, tasksInFamily, kidsInFamily, completedTasks, sh
             recurrenceType: formData.recurrenceType,
             daysOfWeek: formData.recurrenceType === 'weekly' ? formData.daysOfWeek : [],
             startDate: formData.startDate,
-            customDueDate: formData.recurrenceType === 'none' && formData.customDueDate ? formData.customDueDate : null,
+            customDueDate: (formData.recurrenceType === 'none' || formData.recurrenceType === 'immediately') && formData.customDueDate ? formData.customDueDate : null,
             assignedKidId: formData.assignedKidId || null,
             isActive: true,
         };
-        const baseDateForCalc = taskData.recurrenceType === 'none'
-            ? new Date(taskData.customDueDate + 'T00:00:00') // Ensure it's a Date object
+        const baseDateForCalc = (taskData.recurrenceType === 'none' || taskData.recurrenceType === 'immediately')
+            ? new Date(taskData.customDueDate + 'T00:00:00')
             : new Date(taskData.startDate + 'T00:00:00'); // Ensure it's a Date object
         taskData.nextDueDate = calculateNextDueDate({ ...taskData }, baseDateForCalc);
 
@@ -1773,7 +1775,7 @@ const ManageTasks = ({ familyId, tasksInFamily, kidsInFamily, completedTasks, sh
 
     const processedAndSortedTasks = useMemo(() => {
         let processedTasks = tasksInFamily.map(task => {
-            const taskSpecificDueDate = task.recurrenceType === 'none'
+            const taskSpecificDueDate = (task.recurrenceType === 'none' || task.recurrenceType === 'immediately')
                 ? (task.customDueDate ? getStartOfDay(new Date(task.customDueDate)) : null)
                 : (task.nextDueDate?.toDate ? getStartOfDay(task.nextDueDate.toDate()) : null);
 
@@ -1784,7 +1786,7 @@ const ManageTasks = ({ familyId, tasksInFamily, kidsInFamily, completedTasks, sh
             ) : false;
 
             let effectiveDateForSort;
-            if (task.recurrenceType === 'none') {
+            if (task.recurrenceType === 'none' || task.recurrenceType === 'immediately') {
                 effectiveDateForSort = task.customDueDate ? getStartOfDay(new Date(task.customDueDate)).getTime() : 0;
             } else {
                 effectiveDateForSort = task.nextDueDate?.toMillis() || (task.startDate ? getStartOfDay(new Date(task.startDate)).getTime() : 0);
@@ -1987,8 +1989,8 @@ const ManageTasks = ({ familyId, tasksInFamily, kidsInFamily, completedTasks, sh
                 {formData.recurrenceType === 'weekly' && (
                     <DayOfWeekSelector selectedDays={formData.daysOfWeek} onChange={handleInputChange} />
                 )}
-                {formData.recurrenceType === 'none' && (
-                    <InputField label="Specific Due Date (for Non-Recurring)" name="customDueDate" type="date" value={formData.customDueDate} onChange={handleInputChange} />
+                {(formData.recurrenceType === 'none' || formData.recurrenceType === 'immediately') && (
+                    <InputField label="Due Date" name="customDueDate" type="date" value={formData.customDueDate} onChange={handleInputChange} />
                 )}
                 <SelectField label="Assign to Kid" name="assignedKidId" value={formData.assignedKidId} onChange={handleInputChange} options={kidOptions} placeholder="Unassigned (Any Kid)" />
                 <Button onClick={handleSaveTask} className="w-full mt-4 bg-teal-500 hover:bg-teal-600">
@@ -2259,26 +2261,56 @@ const ApproveTasks = ({ familyId, pendingTasks, kidsInFamily, allTasksInFamily, 
             const approverInfo = firebaseUser ? (firebaseUser.displayName || firebaseUser.email || firebaseUser.uid) : 'System';
 
             if (status === 'rejected' && reopenTaskFlag) {
-                batch.delete(completedTaskRef); // Delete the pending submission
+                // For "immediately" tasks, rejecting and reopening means deleting the submission.
+                // For other recurring tasks, it might mean resetting its nextDueDate if it was advanced prematurely,
+                // but typically, nextDueDate is only calculated on approval. So, deleting is fine.
+                batch.delete(completedTaskRef);
             } else {
                 const updateData = {
                     status: status,
                     approvalNote: approvalNote.trim() || null,
                     dateApprovedOrRejected: Timestamp.now(),
                     pointsAwarded: status === 'approved' ? pointsToAdjust : 0,
-                    processedBy: approverInfo
+                    processedBy: approverInfo,
                 };
                 batch.update(completedTaskRef, updateData);
+
                 if (status === 'approved') {
                     batch.update(kidRef, {
                         points: currentKidPoints + pointsToAdjust,
                         totalEarnedPoints: currentTotalEarned + pointsToAdjust
                     });
+
+                    // Handle "Immediately" task cloning
+                    if (mainTaskData.recurrenceType === 'immediately') {
+                        const todayStr = new Date().toISOString().split('T')[0];
+                        const clonedTaskData = {
+                            ...mainTaskData, // Clone most fields
+                            name: mainTaskData.name, // Or add a suffix like "(Auto-cloned)"
+                            startDate: todayStr,
+                            customDueDate: todayStr,
+                            createdAt: Timestamp.now(),
+                            // isActive: true, // Already part of mainTaskData
+                            // daysOfWeek: [], // Already part of mainTaskData if it was 'immediately'
+                        };
+                        delete clonedTaskData.id; // Remove original ID
+                        delete clonedTaskData.nextDueDate; // Will be recalculated
+
+                        const newClonedTaskNextDueDate = calculateNextDueDate(
+                            { ...clonedTaskData, startDate: new Date(clonedTaskData.startDate), customDueDate: new Date(clonedTaskData.customDueDate) },
+                            getStartOfDay(new Date(clonedTaskData.customDueDate))
+                        );
+                        clonedTaskData.nextDueDate = newClonedTaskNextDueDate;
+
+                        const newClonedTaskRef = doc(collection(db, getFamilyScopedCollectionPath(familyId, 'tasks')));
+                        batch.set(newClonedTaskRef, clonedTaskData);
+                    }
                 }
             }
 
-            // If approved and task is recurring, calculate next due date
-            if (status === 'approved' && mainTaskData.recurrenceType && mainTaskData.recurrenceType !== 'none') {
+            // If approved and task is recurring (but NOT 'immediately' or 'none'), calculate next due date for the original task
+            if (status === 'approved' && mainTaskData.recurrenceType &&
+                mainTaskData.recurrenceType !== 'none' && mainTaskData.recurrenceType !== 'immediately') {
                 const completedTaskDueDate = currentTaskForApproval.taskDueDate.toDate();
                 const dayAfterCompletedTaskDueDate = new Date(completedTaskDueDate);
                 dayAfterCompletedTaskDueDate.setDate(dayAfterCompletedTaskDueDate.getDate() + 1);
@@ -2292,9 +2324,7 @@ const ApproveTasks = ({ familyId, pendingTasks, kidsInFamily, allTasksInFamily, 
                     },
                     dayAfterCompletedTaskDueDate // Base calculation for *next* due date starts from day after completion
                 );
-                if (newNextDueDate) {
-                    batch.update(mainTaskRef, { nextDueDate: newNextDueDate });
-                }
+                batch.update(mainTaskRef, { nextDueDate: newNextDueDate }); // newNextDueDate can be null
             }
             await batch.commit();
             closeApprovalModal();
@@ -2823,7 +2853,7 @@ const KidTasksList = ({ kid, familyId, allTasks, completedTasks, showConfirmatio
             const taskStartDate = task.startDate ? getStartOfDay(new Date(task.startDate)) : today;
             if (today < taskStartDate) return false; // Task hasn't started yet
 
-            if (task.recurrenceType === 'none') {
+            if (task.recurrenceType === 'none' || task.recurrenceType === 'immediately') {
                 const customDueDate = task.customDueDate ? getEndOfDay(new Date(task.customDueDate)) : null;
                 if (!customDueDate) return false; // No due date for one-time task
 
@@ -2872,7 +2902,7 @@ const KidTasksList = ({ kid, familyId, allTasks, completedTasks, showConfirmatio
         }).sort((a, b) => {
             // Effective due date for sorting: customDueDate for 'none', nextDueDate for recurring (fallback to startDate if nextDueDate is null)
             const getEffectiveDate = (task) => {
-                if (task.recurrenceType === 'none') return task.customDueDate ? getStartOfDay(new Date(task.customDueDate)).getTime() : Infinity;
+                if (task.recurrenceType === 'none' || task.recurrenceType === 'immediately') return task.customDueDate ? getStartOfDay(new Date(task.customDueDate)).getTime() : Infinity;
                 return task.nextDueDate?.toMillis() || (task.startDate ? getStartOfDay(new Date(task.startDate)).getTime() : Infinity);
             };
             const dueDateA = getEffectiveDate(a);
@@ -2885,7 +2915,7 @@ const KidTasksList = ({ kid, familyId, allTasks, completedTasks, showConfirmatio
 
     const handleCompleteTask = async (task) => {
         // Determine the correct due date for this completion instance
-        const taskDueDateForCompletion = task.recurrenceType === 'none'
+        const taskDueDateForCompletion = (task.recurrenceType === 'none' || task.recurrenceType === 'immediately')
             ? (task.customDueDate ? Timestamp.fromDate(getStartOfDay(new Date(task.customDueDate))) : Timestamp.fromDate(today))
             : task.nextDueDate; // For recurring, this should be the specific instance they are completing
 
@@ -2990,7 +3020,7 @@ const KidTasksList = ({ kid, familyId, allTasks, completedTasks, showConfirmatio
                 <ul className="space-y-4">
                     {tasksToShow.map(task => {
                         // For display, use the relevant due date
-                        const taskSpecificDueDate = task.recurrenceType === 'none'
+                        const taskSpecificDueDate = (task.recurrenceType === 'none' || task.recurrenceType === 'immediately')
                             ? (task.customDueDate ? getStartOfDay(new Date(task.customDueDate)) : null)
                             : (task.nextDueDate?.toDate ? getStartOfDay(task.nextDueDate.toDate()) : null);
 
