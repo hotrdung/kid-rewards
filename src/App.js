@@ -163,12 +163,17 @@ const Modal = ({ isOpen, onClose, title, children, size = "max-w-md" }) => {
     );
 };
 
-const ConfirmationModal = ({ isOpen, onClose, title, message, onConfirm, confirmText = "Confirm", cancelText = "Cancel", children }) => {
+const ConfirmationModal = ({
+    isOpen, onClose, title, message, onConfirm, confirmText = "Confirm", cancelText = "Cancel",
+    children, // This will be the render function: (uiState, setUiState) => JSX
+    modalUiState, // UI state specific to the modal's content
+    setModalUiState // Function to update modalUiState
+}) => {
     if (!isOpen) return null;
     return (
         <Modal isOpen={isOpen} onClose={onClose} title={title} size="max-w-md">
             {message && <p className="text-gray-600 mb-6">{message}</p>}
-            {children && <div className="mb-4">{typeof children === 'function' ? children() : children}</div>}
+            {children && typeof children === 'function' && <div className="mb-4">{children(modalUiState, setModalUiState)}</div>}
             <div className="flex justify-end space-x-3">
                 <Button onClick={onClose} className="bg-gray-300 hover:bg-gray-400 text-gray-800" icon={null}>
                     {cancelText}
@@ -344,15 +349,38 @@ function App() {
     };
 
     const [confirmModalState, setConfirmModalState] = useState({
-        isOpen: false, title: '', message: '', onConfirm: () => { }, children: null
+        isOpen: false, title: '', message: '', onConfirm: () => { }, children: null,
+        modalUiState: {}, // New: state for UI elements within the modal children
+        _setModalUiStateDirectly: () => {} // New: internal updater
     });
 
-    const showConfirmation = (title, message, onConfirmAction, confirmText = "Confirm", modalChildren = null) => {
+    const showConfirmation = (
+        title,
+        message,
+        onConfirmAction, // (modalUiState) => void
+        confirmText = "Confirm",
+        renderModalChildren = null, // (uiState, setUiState) => JSX
+        initialModalUiState = {}
+    ) => {
+        // This function will be stored in confirmModalState to update modalUiState
+        // It ensures that when FulfillRewards's checkbox calls it, App's state is updated.
+        const setUiStateForCurrentModal = (updater) => {
+            setConfirmModalState(prev => ({
+                ...prev,
+                modalUiState: typeof updater === 'function' ? updater(prev.modalUiState) : updater
+            }));
+        };
+
         setConfirmModalState({
-            isOpen: true, title, message, onConfirm: onConfirmAction, confirmText, children: modalChildren
+            isOpen: true, title, message,
+            onConfirm: onConfirmAction, // Will be wrapped later to pass modalUiState
+            confirmText,
+            children: renderModalChildren, // The render function itself
+            modalUiState: initialModalUiState,
+            _setModalUiStateDirectly: setUiStateForCurrentModal, // Pass the updater
         });
     };
-    const closeConfirmation = () => setConfirmModalState(prev => ({ ...prev, isOpen: false, children: null }));
+    const closeConfirmation = () => setConfirmModalState(prev => ({ ...prev, isOpen: false, children: null, modalUiState: {} }));
 
     useEffect(() => {
         const unsubscribe = onAuthStateChanged(auth, async (user) => {
@@ -790,9 +818,16 @@ function App() {
                 onClose={closeConfirmation}
                 title={confirmModalState.title}
                 message={confirmModalState.message}
-                onConfirm={() => { confirmModalState.onConfirm(); closeConfirmation(); }}
+                onConfirm={() => {
+                    if (typeof confirmModalState.onConfirm === 'function') {
+                        confirmModalState.onConfirm(confirmModalState.modalUiState); // Pass UI state to the confirm action
+                    }
+                    closeConfirmation();
+                }}
                 confirmText={confirmModalState.confirmText}
                 children={confirmModalState.children}
+                modalUiState={confirmModalState.modalUiState}
+                setModalUiState={confirmModalState._setModalUiStateDirectly}
             />
             <footer className="text-center py-6 text-gray-500 text-sm">
                 &copy; {new Date().getFullYear()} Kid Rewards App. App ID: {currentAppId}
@@ -2445,20 +2480,19 @@ const ApproveTasks = ({ familyId, pendingTasks, kidsInFamily, allTasksInFamily, 
 // --- Fulfill Rewards (Parent) ---
 const FulfillRewards = ({ familyId, pendingRewards, kidsInFamily, allRewardsList, showConfirmation, firebaseUser }) => {
     const [rewardToProcess, setRewardToProcess] = useState(null);
-    const [cloneRewardOnFulfill, setCloneRewardOnFulfill] = useState(false);
+    // cloneRewardOnFulfill state is removed from here, will be managed by App's confirmModalState.modalUiState
     const [cancellationNote, setCancellationNote] = useState("");
 
     const closeModals = () => {
         setRewardToProcess(null); // This is still useful for clearing after action
-        setCloneRewardOnFulfill(false);
         setCancellationNote("");
     };
 
     const handleFulfill = async () => {
         if (!rewardToProcess) return;
         const originalRewardDetails = allRewardsList.find(r => r.id === rewardToProcess.rewardId);
-        // This is the core logic that will be passed to showConfirmation
-        const processRewardFulfillment = async () => {
+
+        const processRewardFulfillment = async (modalUiState) => { // Receives modalUiState
             if (!rewardToProcess) return; // Re-check, though should be set
             try {
                     const batch = writeBatch(db);
@@ -2469,7 +2503,7 @@ const FulfillRewards = ({ familyId, pendingRewards, kidsInFamily, allRewardsList
                         fulfilledBy: firebaseUser ? (firebaseUser.displayName || firebaseUser.email || firebaseUser.uid) : 'System',
                     });
 
-                    if (cloneRewardOnFulfill && originalRewardDetails) {
+                    if (modalUiState.cloneReward && originalRewardDetails) { // Use from modalUiState
                         const newRewardData = {
                             ...originalRewardDetails,
                             name: `${originalRewardDetails.name}`, // Can adjust if a suffix like "(Relisted)" is needed
@@ -2493,24 +2527,27 @@ const FulfillRewards = ({ familyId, pendingRewards, kidsInFamily, allRewardsList
             `Mark "${rewardToProcess.rewardName}" for ${kidsInFamily.find(k => k.id === rewardToProcess.kidId)?.name} as fulfilled?`,
             processRewardFulfillment,
             "Mark Fulfilled", // confirmText
-            <div>
-                <label className="flex items-center text-sm text-gray-700 mt-2">
-                    <input
-                        type="checkbox"
-                        checked={cloneRewardOnFulfill}
-                        onChange={(e) => setCloneRewardOnFulfill(e.target.checked)}
-                        className="mr-2 h-4 w-4 text-indigo-600 border-gray-300 rounded focus:ring-indigo-500"
-                    />
-                    Re-list this reward for future redemption (within this family)?
-                </label>
-            </div>
+            (uiState, setUiState) => ( // renderModalChildren function
+                <div>
+                    <label className="flex items-center text-sm text-gray-700 mt-2">
+                        <input
+                            type="checkbox"
+                            checked={!!uiState.cloneReward} // Use uiState
+                            onChange={(e) => setUiState(prev => ({ ...prev, cloneReward: e.target.checked }))} // Use setUiState
+                            className="mr-2 h-4 w-4 text-indigo-600 border-gray-300 rounded focus:ring-indigo-500"
+                        />
+                        Re-list this reward for future redemption (within this family)?
+                    </label>
+                </div>
+            ),
+            { cloneReward: false } // initialModalUiState
         );
     };
 
     const handleCancelRequest = async () => {
         if (!rewardToProcess) return;
-        // This is the core logic for cancellation
-        const processRewardCancellation = async () => {
+
+        const processRewardCancellation = async (modalUiState) => { // modalUiState might not be used here but good practice
             if (!rewardToProcess) return; // Re-check
             try {
                     const batch = writeBatch(db);
@@ -2524,7 +2561,7 @@ const FulfillRewards = ({ familyId, pendingRewards, kidsInFamily, allRewardsList
                     batch.update(redeemedRewardRef, {
                         status: 'cancelled_by_parent',
                         dateCancelled: Timestamp.now(),
-                        cancellationNote: cancellationNote.trim() || null,
+                        cancellationNote: modalUiState.cancellationNote ? modalUiState.cancellationNote.trim() : null,
                         cancelledBy: firebaseUser ? (firebaseUser.displayName || firebaseUser.email || firebaseUser.uid) : 'System',
                     });
                     batch.update(kidRef, { points: newPoints });
@@ -2540,25 +2577,26 @@ const FulfillRewards = ({ familyId, pendingRewards, kidsInFamily, allRewardsList
             `Cancel request for "${rewardToProcess.rewardName}" by ${kidsInFamily.find(k => k.id === rewardToProcess.kidId)?.name}? Points will be returned.`,
             processRewardCancellation,
             "Yes, Cancel & Return Points", // confirmText
-            () => ( // Pass as a render function
+            (uiState, setUiState) => ( // renderModalChildren
                 <div>
                     <TextAreaField
                         label="Reason for cancellation (optional):"
-                        value={cancellationNote}
-                        onChange={e => setCancellationNote(e.target.value)}
+                        value={uiState.cancellationNote || ""}
+                        onChange={e => setUiState(prev => ({ ...prev, cancellationNote: e.target.value }))}
                         placeholder="e.g., Item out of stock"
                     />
                 </div>
-            )
+            ),
+            { cancellationNote: "" } // initialModalUiState
         );
     };
 
     // New trigger functions that will be called by the buttons in the list
     const triggerFulfillConfirmation = (redeemedReward) => {
         setRewardToProcess(redeemedReward);
-        setCloneRewardOnFulfill(false); // Reset for the modal
+        // No need to setCloneRewardOnFulfill here, it's handled by initialModalUiState
 
-        const processActualFulfillment = async () => {
+        const processActualFulfillment = async (modalUiState) => { // Receives modalUiState
             if (!rewardToProcess) return; // Should be set by now from the outer scope
             const originalRewardDetails = allRewardsList.find(r => r.id === rewardToProcess.rewardId);
             try {
@@ -2570,7 +2608,7 @@ const FulfillRewards = ({ familyId, pendingRewards, kidsInFamily, allRewardsList
                     fulfilledBy: firebaseUser ? (firebaseUser.displayName || firebaseUser.email || firebaseUser.uid) : 'System',
                 });
 
-                if (cloneRewardOnFulfill && originalRewardDetails) { // cloneRewardOnFulfill is from FulfillRewards state
+                if (modalUiState.cloneReward && originalRewardDetails) { // Use from modalUiState
                     const newRewardData = { ...originalRewardDetails, createdAt: Timestamp.now(), isAvailable: true, };
                     delete newRewardData.id;
                     const newRewardRef = doc(collection(db, getFamilyScopedCollectionPath(familyId, 'rewards')));
@@ -2582,22 +2620,26 @@ const FulfillRewards = ({ familyId, pendingRewards, kidsInFamily, allRewardsList
         };
 
         showConfirmation("Confirm Fulfillment", `Mark "${redeemedReward.rewardName}" for ${kidsInFamily.find(k => k.id === redeemedReward.kidId)?.name} as fulfilled?`, processActualFulfillment, "Mark Fulfilled",
-            () => ( // Pass as a render function
+            (uiState, setUiState) => ( // renderModalChildren function
                 <div>
                     <label className="flex items-center text-sm text-gray-700 mt-2">
-                        <input type="checkbox" checked={cloneRewardOnFulfill} onChange={(e) => setCloneRewardOnFulfill(e.target.checked)} className="mr-2 h-4 w-4 text-indigo-600 border-gray-300 rounded focus:ring-indigo-500" />
+                        <input
+                            type="checkbox"
+                            checked={!!uiState.cloneReward} // Use uiState
+                            onChange={(e) => setUiState(prev => ({ ...prev, cloneReward: e.target.checked }))} // Use setUiState
+                            className="mr-2 h-4 w-4 text-indigo-600 border-gray-300 rounded focus:ring-indigo-500" />
                         Re-list this reward for future redemption?
                     </label>
                 </div>
-            )
+            ),
+            { cloneReward: false } // initialModalUiState
         );
     };
 
     const triggerCancelConfirmation = (redeemedReward) => {
         setRewardToProcess(redeemedReward);
-        setCancellationNote(""); // Reset for the modal
 
-        const processActualCancellation = async () => {
+        const processActualCancellation = async (modalUiState) => { // Receives modalUiState
             if (!rewardToProcess) return;
             try {
                 const batch = writeBatch(db);
@@ -2606,16 +2648,27 @@ const FulfillRewards = ({ familyId, pendingRewards, kidsInFamily, allRewardsList
                 const kidDoc = await getDoc(kidRef);
                 if (!kidDoc.exists()) throw new Error("Kid not found for point refund.");
                 const newPoints = (kidDoc.data().points || 0) + rewardToProcess.pointsSpent;
-                batch.update(redeemedRewardRef, { status: 'cancelled_by_parent', dateCancelled: Timestamp.now(), cancellationNote: cancellationNote.trim() || null, cancelledBy: firebaseUser ? (firebaseUser.displayName || firebaseUser.email || firebaseUser.uid) : 'System', });
+                batch.update(redeemedRewardRef, {
+                    status: 'cancelled_by_parent',
+                    dateCancelled: Timestamp.now(),
+                    cancellationNote: modalUiState.cancellationNote ? modalUiState.cancellationNote.trim() : null, // Use from modalUiState
+                    cancelledBy: firebaseUser ? (firebaseUser.displayName || firebaseUser.email || firebaseUser.uid) : 'System',
+                });
                 batch.update(kidRef, { points: newPoints });
                 await batch.commit();
                 closeModals();
             } catch (error) { console.error("Error cancelling reward request:", error); }
         };        
         showConfirmation("Cancel Reward Request", `Cancel request for "${redeemedReward.rewardName}" by ${kidsInFamily.find(k => k.id === redeemedReward.kidId)?.name}? Points will be returned.`, processActualCancellation, "Yes, Cancel & Return Points", 
-            () => ( // Pass as a render function
-                <div><TextAreaField label="Reason for cancellation (optional):" value={cancellationNote} onChange={e => setCancellationNote(e.target.value)} placeholder="e.g., Item out of stock" /></div>
-            ));
+            (uiState, setUiState) => ( // renderModalChildren
+                <div>
+                    <TextAreaField
+                        label="Reason for cancellation (optional):"
+                        value={uiState.cancellationNote || ""}
+                        onChange={e => setUiState(prev => ({ ...prev, cancellationNote: e.target.value }))}
+                        placeholder="e.g., Item out of stock" />
+                </div>
+            ), { cancellationNote: "" }); // initialModalUiState
     };
 
     if (pendingRewards.length === 0) {
