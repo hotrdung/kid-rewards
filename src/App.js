@@ -2480,7 +2480,6 @@ const ApproveTasks = ({ familyId, pendingTasks, kidsInFamily, allTasksInFamily, 
 // --- Fulfill Rewards (Parent) ---
 const FulfillRewards = ({ familyId, pendingRewards, kidsInFamily, allRewardsList, showConfirmation, firebaseUser }) => {
     const [rewardToProcess, setRewardToProcess] = useState(null);
-    // cloneRewardOnFulfill state is removed from here, will be managed by App's confirmModalState.modalUiState
     const [cancellationNote, setCancellationNote] = useState("");
 
     const closeModals = () => {
@@ -2488,120 +2487,14 @@ const FulfillRewards = ({ familyId, pendingRewards, kidsInFamily, allRewardsList
         setCancellationNote("");
     };
 
-    const handleFulfill = async () => {
-        if (!rewardToProcess) return;
-        const originalRewardDetails = allRewardsList.find(r => r.id === rewardToProcess.rewardId);
-
-        const processRewardFulfillment = async (modalUiState) => { // Receives modalUiState
-            if (!rewardToProcess) return; // Re-check, though should be set
-            try {
-                    const batch = writeBatch(db);
-                    const redeemedRewardRef = doc(db, getFamilyScopedCollectionPath(familyId, 'redeemedRewards'), rewardToProcess.id);
-                    batch.update(redeemedRewardRef, {
-                        status: 'fulfilled',
-                        dateFulfilled: Timestamp.now(),
-                        fulfilledBy: firebaseUser ? (firebaseUser.displayName || firebaseUser.email || firebaseUser.uid) : 'System',
-                    });
-
-                    if (modalUiState.cloneReward && originalRewardDetails) { // Use from modalUiState
-                        const newRewardData = {
-                            ...originalRewardDetails,
-                            name: `${originalRewardDetails.name}`, // Can adjust if a suffix like "(Relisted)" is needed
-                            createdAt: Timestamp.now(),
-                            isAvailable: true,
-                        };
-                        delete newRewardData.id; // Remove original ID to create a new doc
-                        const newRewardRef = doc(collection(db, getFamilyScopedCollectionPath(familyId, 'rewards')));
-                        batch.set(newRewardRef, newRewardData);
-                    }
-                    await batch.commit();
-                    closeModals();
-                } catch (error) {
-                    console.error("Error fulfilling reward:", error);
-                    // Potentially show an error to the user via a state variable if needed
-                }
-        };
-
-        showConfirmation(
-            "Confirm Fulfillment",
-            `Mark "${rewardToProcess.rewardName}" for ${kidsInFamily.find(k => k.id === rewardToProcess.kidId)?.name} as fulfilled?`,
-            processRewardFulfillment,
-            "Mark Fulfilled", // confirmText
-            (uiState, setUiState) => ( // renderModalChildren function
-                <div>
-                    <label className="flex items-center text-sm text-gray-700 mt-2">
-                        <input
-                            type="checkbox"
-                            checked={!!uiState.cloneReward} // Use uiState
-                            onChange={(e) => setUiState(prev => ({ ...prev, cloneReward: e.target.checked }))} // Use setUiState
-                            className="mr-2 h-4 w-4 text-indigo-600 border-gray-300 rounded focus:ring-indigo-500"
-                        />
-                        Re-list this reward for future redemption (within this family)?
-                    </label>
-                </div>
-            ),
-            { cloneReward: false } // initialModalUiState
-        );
-    };
-
-    const handleCancelRequest = async () => {
-        if (!rewardToProcess) return;
-
-        const processRewardCancellation = async (modalUiState) => { // modalUiState might not be used here but good practice
-            if (!rewardToProcess) return; // Re-check
-            try {
-                    const batch = writeBatch(db);
-                    const redeemedRewardRef = doc(db, getFamilyScopedCollectionPath(familyId, 'redeemedRewards'), rewardToProcess.id);
-                    const kidRef = doc(db, getFamilyScopedCollectionPath(familyId, 'kids'), rewardToProcess.kidId);
-                    const kidDoc = await getDoc(kidRef);
-
-                    if (!kidDoc.exists()) throw new Error("Kid not found for point refund.");
-
-                    const newPoints = (kidDoc.data().points || 0) + rewardToProcess.pointsSpent;
-                    batch.update(redeemedRewardRef, {
-                        status: 'cancelled_by_parent',
-                        dateCancelled: Timestamp.now(),
-                        cancellationNote: modalUiState.cancellationNote ? modalUiState.cancellationNote.trim() : null,
-                        cancelledBy: firebaseUser ? (firebaseUser.displayName || firebaseUser.email || firebaseUser.uid) : 'System',
-                    });
-                    batch.update(kidRef, { points: newPoints });
-                    await batch.commit();
-                    closeModals();
-                } catch (error) {
-                    console.error("Error cancelling reward request:", error);
-                    // Potentially show an error
-                }
-        };
-        showConfirmation(
-            "Cancel Reward Request",
-            `Cancel request for "${rewardToProcess.rewardName}" by ${kidsInFamily.find(k => k.id === rewardToProcess.kidId)?.name}? Points will be returned.`,
-            processRewardCancellation,
-            "Yes, Cancel & Return Points", // confirmText
-            (uiState, setUiState) => ( // renderModalChildren
-                <div>
-                    <TextAreaField
-                        label="Reason for cancellation (optional):"
-                        value={uiState.cancellationNote || ""}
-                        onChange={e => setUiState(prev => ({ ...prev, cancellationNote: e.target.value }))}
-                        placeholder="e.g., Item out of stock"
-                    />
-                </div>
-            ),
-            { cancellationNote: "" } // initialModalUiState
-        );
-    };
-
-    // New trigger functions that will be called by the buttons in the list
     const triggerFulfillConfirmation = (redeemedReward) => {
-        setRewardToProcess(redeemedReward);
-        // No need to setCloneRewardOnFulfill here, it's handled by initialModalUiState
-
-        const processActualFulfillment = async (modalUiState) => { // Receives modalUiState
-            if (!rewardToProcess) return; // Should be set by now from the outer scope
-            const originalRewardDetails = allRewardsList.find(r => r.id === rewardToProcess.rewardId);
+        // The 'redeemedReward' parameter is the specific item to process.
+        const processThisFulfillment = async (modalUiState) => {
+            if (!redeemedReward) return;
+            const originalRewardDetails = allRewardsList.find(r => r.id === redeemedReward.rewardId);
             try {
                 const batch = writeBatch(db);
-                const redeemedRewardRef = doc(db, getFamilyScopedCollectionPath(familyId, 'redeemedRewards'), rewardToProcess.id);
+                const redeemedRewardRef = doc(db, getFamilyScopedCollectionPath(familyId, 'redeemedRewards'), redeemedReward.id);
                 batch.update(redeemedRewardRef, {
                     status: 'fulfilled',
                     dateFulfilled: Timestamp.now(),
@@ -2619,14 +2512,18 @@ const FulfillRewards = ({ familyId, pendingRewards, kidsInFamily, allRewardsList
             } catch (error) { console.error("Error fulfilling reward:", error); }
         };
 
-        showConfirmation("Confirm Fulfillment", `Mark "${redeemedReward.rewardName}" for ${kidsInFamily.find(k => k.id === redeemedReward.kidId)?.name} as fulfilled?`, processActualFulfillment, "Mark Fulfilled",
+        showConfirmation(
+            "Confirm Fulfillment",
+            `Mark "${redeemedReward.rewardName}" for ${kidsInFamily.find(k => k.id === redeemedReward.kidId)?.name} as fulfilled?`,
+            processThisFulfillment,
+            "Mark Fulfilled",
             (uiState, setUiState) => ( // renderModalChildren function
                 <div>
                     <label className="flex items-center text-sm text-gray-700 mt-2">
                         <input
                             type="checkbox"
-                            checked={!!uiState.cloneReward} // Use uiState
-                            onChange={(e) => setUiState(prev => ({ ...prev, cloneReward: e.target.checked }))} // Use setUiState
+                            checked={!!uiState.cloneReward}
+                            onChange={(e) => setUiState(prev => ({ ...prev, cloneReward: e.target.checked }))}
                             className="mr-2 h-4 w-4 text-indigo-600 border-gray-300 rounded focus:ring-indigo-500" />
                         Re-list this reward for future redemption?
                     </label>
@@ -2637,36 +2534,40 @@ const FulfillRewards = ({ familyId, pendingRewards, kidsInFamily, allRewardsList
     };
 
     const triggerCancelConfirmation = (redeemedReward) => {
-        setRewardToProcess(redeemedReward);
-
-        const processActualCancellation = async (modalUiState) => { // Receives modalUiState
-            if (!rewardToProcess) return;
+        // The 'redeemedReward' parameter is the specific item to process.
+        const processThisCancellation = async (modalUiState) => {
+            if (!redeemedReward) return;
             try {
                 const batch = writeBatch(db);
-                const redeemedRewardRef = doc(db, getFamilyScopedCollectionPath(familyId, 'redeemedRewards'), rewardToProcess.id);
-                const kidRef = doc(db, getFamilyScopedCollectionPath(familyId, 'kids'), rewardToProcess.kidId);
+                const redeemedRewardRef = doc(db, getFamilyScopedCollectionPath(familyId, 'redeemedRewards'), redeemedReward.id);
+                const kidRef = doc(db, getFamilyScopedCollectionPath(familyId, 'kids'), redeemedReward.kidId);
                 const kidDoc = await getDoc(kidRef);
                 if (!kidDoc.exists()) throw new Error("Kid not found for point refund.");
-                const newPoints = (kidDoc.data().points || 0) + rewardToProcess.pointsSpent;
+                const newPoints = (kidDoc.data().points || 0) + redeemedReward.pointsSpent;
                 batch.update(redeemedRewardRef, {
                     status: 'cancelled_by_parent',
                     dateCancelled: Timestamp.now(),
-                    cancellationNote: modalUiState.cancellationNote ? modalUiState.cancellationNote.trim() : null, // Use from modalUiState
+                    cancellationNote: modalUiState.cancellationNote ? modalUiState.cancellationNote.trim() : null,
                     cancelledBy: firebaseUser ? (firebaseUser.displayName || firebaseUser.email || firebaseUser.uid) : 'System',
                 });
                 batch.update(kidRef, { points: newPoints });
                 await batch.commit();
                 closeModals();
             } catch (error) { console.error("Error cancelling reward request:", error); }
-        };        
-        showConfirmation("Cancel Reward Request", `Cancel request for "${redeemedReward.rewardName}" by ${kidsInFamily.find(k => k.id === redeemedReward.kidId)?.name}? Points will be returned.`, processActualCancellation, "Yes, Cancel & Return Points", 
+        };
+        showConfirmation(
+            "Cancel Reward Request",
+            `Cancel request for "${redeemedReward.rewardName}" by ${kidsInFamily.find(k => k.id === redeemedReward.kidId)?.name}? Points will be returned.`,
+            processThisCancellation,
+            "Yes, Cancel & Return Points",
             (uiState, setUiState) => ( // renderModalChildren
                 <div>
                     <TextAreaField
                         label="Reason for cancellation (optional):"
                         value={uiState.cancellationNote || ""}
                         onChange={e => setUiState(prev => ({ ...prev, cancellationNote: e.target.value }))}
-                        placeholder="e.g., Item out of stock" />
+                        placeholder="e.g., Item out of stock"
+                    />
                 </div>
             ), { cancellationNote: "" }); // initialModalUiState
     };
