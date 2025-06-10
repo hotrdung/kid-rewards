@@ -1683,9 +1683,9 @@ const ManageTasks = ({ familyId, tasksInFamily, kidsInFamily, completedTasks, sh
             name: task.name,
             points: task.points.toString(),
             recurrenceType: task.recurrenceType || 'none',
-            daysOfWeek: task.daysOfWeek || [],
+            daysOfWeek: task.daysOfWeek || [], // Keep existing daysOfWeek
             startDate: task.startDate ? new Date(task.startDate + 'T00:00:00').toISOString().split('T')[0] : new Date().toISOString().split('T')[0],
-            customDueDate: task.customDueDate ? new Date(task.customDueDate + 'T00:00:00').toISOString().split('T')[0] : (task.recurrenceType === 'immediately' ? (task.startDate ? new Date(task.startDate + 'T00:00:00').toISOString().split('T')[0] : todayDateStringForForm) : ''),
+            customDueDate: task.customDueDate ? new Date(task.customDueDate + 'T00:00:00').toISOString().split('T')[0] : '', // If not set in DB, leave blank in form.
             assignedKidId: task.assignedKidId || '',
         });
         setFormError('');
@@ -1699,8 +1699,8 @@ const ManageTasks = ({ familyId, tasksInFamily, kidsInFamily, completedTasks, sh
             points: taskToClone.points.toString(),
             recurrenceType: taskToClone.recurrenceType || 'none',
             daysOfWeek: taskToClone.daysOfWeek || [],
-            startDate: taskToClone.startDate ? new Date(taskToClone.startDate + 'T00:00:00').toISOString().split('T')[0] : new Date().toISOString().split('T')[0],
-            customDueDate: taskToClone.customDueDate ? new Date(taskToClone.customDueDate + 'T00:00:00').toISOString().split('T')[0] : (taskToClone.recurrenceType === 'immediately' ? (taskToClone.startDate ? new Date(taskToClone.startDate + 'T00:00:00').toISOString().split('T')[0] : todayDateStringForForm) : ''),
+            startDate: taskToClone.startDate ? new Date(taskToClone.startDate + 'T00:00:00').toISOString().split('T')[0] : todayDateStringForForm,
+            customDueDate: taskToClone.customDueDate ? new Date(taskToClone.customDueDate + 'T00:00:00').toISOString().split('T')[0] : '', // If original didn't have one, cloned one starts blank.
             assignedKidId: taskToClone.assignedKidId || '',
         });
         setFormError('');
@@ -1714,11 +1714,14 @@ const ManageTasks = ({ familyId, tasksInFamily, kidsInFamily, completedTasks, sh
         if (formData.recurrenceType === 'weekly' && formData.daysOfWeek.length === 0) {
             setFormError('Please select at least one day for weekly recurrence.'); return;
         }
-        if (!formData.startDate) { setFormError('Start date is required.'); return; }
+        if (!formData.startDate) { 
+            setFormError('Start date is required.'); return; 
+        }
+        // For 'none' or 'immediately' tasks, a specific Due Date is mandatory.
         if ((formData.recurrenceType === 'none' || formData.recurrenceType === 'immediately') && !formData.customDueDate) {
             setFormError('For this recurrence type, a Due Date is required.'); return;
         }
-        if (formData.customDueDate && new Date(formData.customDueDate) < new Date(formData.startDate)) {
+        if (formData.customDueDate && formData.startDate && new Date(formData.customDueDate) < new Date(formData.startDate)) {
             setFormError('Due date cannot be before start date.'); return;
         }
         setFormError('');
@@ -1729,15 +1732,26 @@ const ManageTasks = ({ familyId, tasksInFamily, kidsInFamily, completedTasks, sh
             recurrenceType: formData.recurrenceType,
             daysOfWeek: formData.recurrenceType === 'weekly' ? formData.daysOfWeek : [],
             startDate: formData.startDate,
-            customDueDate: (formData.recurrenceType === 'none' || formData.recurrenceType === 'immediately') && formData.customDueDate ? formData.customDueDate : null,
+            customDueDate: formData.customDueDate || null, // Save customDueDate if provided
             assignedKidId: formData.assignedKidId || null,
             isActive: true,
+            nextDueDate: null, // Initialize
         };
-        const baseDateForCalc = (taskData.recurrenceType === 'none' || taskData.recurrenceType === 'immediately')
-            ? new Date(taskData.customDueDate + 'T00:00:00')
-            : new Date(taskData.startDate + 'T00:00:00'); // Ensure it's a Date object
-        taskData.nextDueDate = calculateNextDueDate({ ...taskData }, baseDateForCalc);
 
+        if (formData.customDueDate) {
+            // If a custom due date is explicitly set by the user, this becomes the next (or first) due date.
+            taskData.nextDueDate = Timestamp.fromDate(getStartOfDay(new Date(formData.customDueDate)));
+        } else {
+            // If no custom due date is set by the user:
+            // For 'none' and 'immediately' types, validation should have ensured customDueDate was provided.
+            // So, this branch is primarily for 'daily', 'weekly', 'monthly' without a user-set customDueDate.
+            if (taskData.recurrenceType !== 'none' && taskData.recurrenceType !== 'immediately') {
+                const baseDateForCalc = new Date(taskData.startDate + 'T00:00:00');
+                // Pass a task object without customDueDate to ensure the calculation uses the pattern.
+                const tempTaskForCalc = {...taskData, customDueDate: null};
+                taskData.nextDueDate = calculateNextDueDate(tempTaskForCalc, baseDateForCalc);
+            }
+        }
         try {
             const tasksPath = getFamilyScopedCollectionPath(familyId, 'tasks');
             if (editingTask) {
@@ -1989,9 +2003,7 @@ const ManageTasks = ({ familyId, tasksInFamily, kidsInFamily, completedTasks, sh
                 {formData.recurrenceType === 'weekly' && (
                     <DayOfWeekSelector selectedDays={formData.daysOfWeek} onChange={handleInputChange} />
                 )}
-                {(formData.recurrenceType === 'none' || formData.recurrenceType === 'immediately') && (
-                    <InputField label="Due Date" name="customDueDate" type="date" value={formData.customDueDate} onChange={handleInputChange} />
-                )}
+                <InputField label="Due Date (Optional for Daily/Weekly/Monthly)" name="customDueDate" type="date" value={formData.customDueDate} onChange={handleInputChange} />
                 <SelectField label="Assign to Kid" name="assignedKidId" value={formData.assignedKidId} onChange={handleInputChange} options={kidOptions} placeholder="Unassigned (Any Kid)" />
                 <Button onClick={handleSaveTask} className="w-full mt-4 bg-teal-500 hover:bg-teal-600">
                     {editingTask ? "Save Changes" : "Add Task"}
