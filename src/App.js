@@ -2857,7 +2857,7 @@ const KidProfile = ({ kid, pointsToday, pointsThisWeek, pointsThisMonth, pending
 const KidTasksList = ({ kid, familyId, allTasks, completedTasks, showConfirmation }) => {
     const [showFeedback, setShowFeedback] = useState('');
     const [feedbackType, setFeedbackType] = useState('info'); // 'info', 'success', 'error'
-    const [taskViewPeriod, setTaskViewPeriod] = useState('today'); // 'today' or 'week'
+    const [taskViewPeriod, setTaskViewPeriod] = useState('today'); // 'today', 'week', or 'all_upcoming'
 
     const today = getStartOfDay(new Date()); // Consistent "today" for calculations
     const todayEnd = getEndOfDay(today);
@@ -2871,46 +2871,44 @@ const KidTasksList = ({ kid, familyId, allTasks, completedTasks, showConfirmatio
                 return false;
             }
 
-            const taskStartDate = task.startDate ? getStartOfDay(new Date(task.startDate)) : today;
-            if (today < taskStartDate) return false; // Task hasn't started yet
-
+            // Task visibility is now determined by its due date relative to the view period,
+            // allowing tasks starting in the future to be seen in "All Upcoming".
             if (task.recurrenceType === 'none' || task.recurrenceType === 'immediately') {
-                const customDueDate = task.customDueDate ? getEndOfDay(new Date(task.customDueDate)) : null;
-                if (!customDueDate) return false; // No due date for one-time task
+                const customDueDateAsStartOfDay = task.customDueDate ? getStartOfDay(new Date(task.customDueDate)) : null;
+                if (!customDueDateAsStartOfDay) return false; // Must have a due date
 
                 const completedOrPendingForThisDueDate = completedTasks.find(ct =>
                     ct.taskId === task.id &&
                     ct.kidId === kid.id &&
                     (ct.status === 'approved' || ct.status === 'pending_approval') &&
-                    ct.taskDueDate?.toDate().getTime() === getStartOfDay(new Date(task.customDueDate)).getTime()
+                    ct.taskDueDate?.toDate().getTime() === customDueDateAsStartOfDay.getTime()
                 );
+                if (completedOrPendingForThisDueDate) return false; // Already done/pending for this instance
 
-                const isOverdue = customDueDate < today;
-                const isDueToday = customDueDate >= today && customDueDate <= todayEnd;
-
-                // Show if not completed/pending AND ( (is overdue OR is due today) OR it falls within the selected view period )
-                return !completedOrPendingForThisDueDate && (
-                    (isOverdue || isDueToday) ||
-                    (customDueDate >= today && customDueDate <= (taskViewPeriod === 'today' ? todayEnd : weekEnd))
-                );
-
-            } else { // Recurring tasks
+                if (taskViewPeriod === 'all_upcoming') {
+                    return true; // Show if not completed, active, assigned, started.
+                } else {
+                    // For 'today' or 'week' view
+                    const customDueDateEndForPeriodCheck = getEndOfDay(new Date(task.customDueDate)); // Use EndOfDay for range check consistency
+                    const isOverdue = customDueDateEndForPeriodCheck < today; // Due date was before today
+                    const isDueToday = customDueDateAsStartOfDay.getTime() === today.getTime(); // Due date is today
+                    const isInPeriod = customDueDateAsStartOfDay >= today && customDueDateAsStartOfDay <= (taskViewPeriod === 'today' ? todayEnd : weekEnd);
+                    return isOverdue || isDueToday || isInPeriod;
+                }
+            } else { // Recurring tasks (daily, weekly, monthly)
                 const nextDueDate = task.nextDueDate?.toDate ? getStartOfDay(task.nextDueDate.toDate()) : null;
-                if (!nextDueDate) return false;
 
-                const isOverdue = nextDueDate < today;
-                const isDueToday = nextDueDate.getTime() === today.getTime();
-
-                // For "Today's Tasks" view, also consider if the task's startDate is today,
-                // especially for recurring tasks that might have a nextDueDate further out but should appear if they start today.
-                const startsToday = task.startDate ? getStartOfDay(new Date(task.startDate)).getTime() === today.getTime() : false;
-
-                // Check if the next due date falls within the selected period OR is overdue OR is due today (or starts today for 'today' view)
-                const isRelevantToPeriod = (taskViewPeriod === 'today' && (isDueToday || startsToday)) ||
-                                       (taskViewPeriod === 'week' && nextDueDate >= weekStart && nextDueDate <= weekEnd);
-
-                if (!isRelevantToPeriod && !isOverdue && !isDueToday) return false;
-
+                if (!nextDueDate) {
+                    // If a recurring task has no nextDueDate calculated yet (e.g., starts far in the future)
+                    if (taskViewPeriod === 'all_upcoming') {
+                        const taskActualStartDate = task.startDate ? getStartOfDay(new Date(task.startDate)) : null;
+                        if (taskActualStartDate && taskActualStartDate > todayEnd) {
+                            return true; // Show in "All Upcoming" if it's set to start in the future
+                        }
+                    }
+                    return false; // Otherwise, if no nextDueDate, don't show
+                }
+                
                 // Check if already submitted or approved for this specific next due date
                 const submittedOrApprovedForThisDueDate = completedTasks.find(ct =>
                     ct.taskId === task.id &&
@@ -2918,7 +2916,22 @@ const KidTasksList = ({ kid, familyId, allTasks, completedTasks, showConfirmatio
                     ct.taskDueDate?.toDate().getTime() === nextDueDate.getTime() &&
                     (ct.status === 'approved' || ct.status === 'pending_approval')
                 );
-                return !submittedOrApprovedForThisDueDate;
+                if (submittedOrApprovedForThisDueDate) return false; // Already done/pending for this instance
+
+                if (taskViewPeriod === 'all_upcoming') {
+                    return true; // Show if not completed, active, assigned, started, and has a nextDueDate.
+                } else {
+                    // For 'today' or 'week' view
+                    const isOverdue = nextDueDate < today;
+                    const isDueToday = nextDueDate.getTime() === today.getTime();
+                    // For 'today' view, also consider if the task's startDate is today for recurring tasks.
+                    const startsTodayAndIsTodayView = (taskViewPeriod === 'today' && task.startDate && getStartOfDay(new Date(task.startDate)).getTime() === today.getTime());
+                    
+                    const isInPeriod = (taskViewPeriod === 'today' && (isDueToday || startsTodayAndIsTodayView)) ||
+                                       (taskViewPeriod === 'week' && nextDueDate >= weekStart && nextDueDate <= weekEnd);
+                    
+                    return isOverdue || isDueToday || isInPeriod;
+                }
             }
         }).sort((a, b) => {
             // Effective due date for sorting: customDueDate for 'none', nextDueDate for recurring (fallback to startDate if nextDueDate is null)
@@ -3026,7 +3039,8 @@ const KidTasksList = ({ kid, familyId, allTasks, completedTasks, showConfirmatio
                     onChange={e => setTaskViewPeriod(e.target.value)}
                     options={[
                         { value: 'today', label: "Today's Tasks" },
-                        { value: 'week', label: "This Week's Tasks" }
+                        { value: 'week', label: "This Week's Tasks" },
+                        { value: 'all_upcoming', label: "All Upcoming Tasks" }
                     ]}
                 />
             </div>
