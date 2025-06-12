@@ -41,19 +41,19 @@ const KidHighscores = ({ currentKid, currentFamilyId }) => {
                     const kidsSnap = await getDocs(kidsQuery);
                     const familyDoc = await getDoc(doc(db, familiesCollectionPath, currentFamilyId));
                     const familyName = familyDoc.exists() ? familyDoc.data().familyName : "Your Family";
-                    kidsSnap.forEach(kidDoc => {
+                    fetchedKids = kidsSnap.docs.map(kidDoc => {
                         const kidData = kidDoc.data();
-                        fetchedKids.push({ id: kidDoc.id, name: kidData.name, points: kidData.totalEarnedPoints || 0, familyName: familyName, isCurrentUser: kidDoc.id === currentKid.id });
+                        return { id: kidDoc.id, name: kidData.name, points: kidData.totalEarnedPoints || 0, familyName: familyName, isCurrentUser: currentKid ? kidDoc.id === currentKid.id : false };
                     });
                 } else if (familyScope === 'group' && familyHighscoreGroupId) {
                     const participatingFamiliesQuery = query(collection(db, familiesCollectionPath), where("highscoreScope", "==", "group"), where("highscoreGroupId", "==", familyHighscoreGroupId));
                     const familiesSnap = await getDocs(participatingFamiliesQuery);
-                    const kidFetchPromises = familiesSnap.docs.map(familyDoc => {
+                    const kidFetchPromises = familiesSnap.docs.map(async (familyDoc) => { // make async for await inside
                         const familyData = familyDoc.data();
                         const kidsInFamilyQuery = query(collection(db, getFamilyScopedCollectionPath(familyDoc.id, 'kids')));
                         return getDocs(kidsInFamilyQuery).then(kidsSnap => kidsSnap.docs.map(kidDoc => {
                             const kidData = kidDoc.data();
-                            return { id: kidDoc.id, authUid: kidData.authUid, name: kidData.name, points: kidData.totalEarnedPoints || 0, familyName: familyData.familyName, isCurrentUser: (kidData.authUid === currentKid.authUid || kidDoc.id === currentKid.id) && familyDoc.id === currentFamilyId };
+                            return { id: kidDoc.id, authUid: kidData.authUid, name: kidData.name, points: kidData.totalEarnedPoints || 0, familyName: familyData.familyName, isCurrentUser: currentKid ? ((kidData.authUid === currentKid.authUid || kidDoc.id === currentKid.id) && familyDoc.id === currentFamilyId) : false };
                         }));
                     });
                     const results = await Promise.all(kidFetchPromises);
@@ -67,7 +67,7 @@ const KidHighscores = ({ currentKid, currentFamilyId }) => {
 
         if (familyScope && familyScope !== 'disabled') fetchScores();
         else setIsLoading(false);
-    }, [familyScope, familyHighscoreGroupId, currentFamilyId, currentKid.id, currentKid.authUid]);
+    }, [familyScope, familyHighscoreGroupId, currentFamilyId, currentKid?.id, currentKid?.authUid]);
 
     if (isLoading) {
         return <Card><h3 className="text-2xl font-semibold text-gray-700 mb-4">Highscores</h3><p>Loading highscores...</p></Card>;

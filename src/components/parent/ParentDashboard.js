@@ -1,6 +1,6 @@
 // src/components/parent/ParentDashboard.js
-import React, { useState, useEffect, useRef } from 'react';
-import { ClipboardList, Trophy, Bell, Users, PackageCheck, ListChecks, MoreHorizontal, UserCog, Eye as EyeIcon } from 'lucide-react';
+import React, { useState, useEffect, useMemo, useRef } from 'react'; // Added useMemo
+import { ClipboardList, Trophy, Bell, Users, PackageCheck, ListChecks, MoreHorizontal, UserCog, Eye as EyeIcon, ListOrdered } from 'lucide-react'; // Added ListOrdered
 import Card from '../common/Card';
 import Button from '../common/Button';
 import NavItemButton from '../common/NavItemButton';
@@ -10,6 +10,7 @@ import ManageRewards from './ManageRewards';
 import ApproveTasks from './ApproveTasks';
 import FulfillRewards from './FulfillRewards';
 import ParentRewardHistory from './ParentRewardHistory';
+import KidHighscores from '../kid/KidHighscores'; // Import KidHighscores
 
 const ParentDashboard = ({ user, familyId, kids, tasks, rewards, completedTasks, redeemedRewardsData, showConfirmation, switchToAdminViewFunc, switchToFamilyViewFunc }) => {
     const [activeTab, setActiveTab] = useState('tasks');
@@ -28,6 +29,7 @@ const ParentDashboard = ({ user, familyId, kids, tasks, rewards, completedTasks,
         { name: 'kids', icon: Users, label: "Kids" },
         { name: 'fulfillRewards', icon: PackageCheck, label: "Fulfill Rewards", count: pendingFulfillmentRewards.length },
         { name: 'history', icon: ListChecks, label: "History" },
+        { name: 'highscores', icon: ListOrdered, label: "Highscores" },
     ];
 
     const handleTabClick = (tabName, isFromMoreMenu = false) => {
@@ -58,6 +60,7 @@ const ParentDashboard = ({ user, familyId, kids, tasks, rewards, completedTasks,
             case 'approveTasks': return <ApproveTasks familyId={familyId} pendingTasks={pendingTasks} kidsInFamily={kids} allTasksInFamily={tasks} showConfirmation={showConfirmation} firebaseUser={user} />;
             case 'fulfillRewards': return <FulfillRewards familyId={familyId} pendingRewards={pendingFulfillmentRewards} kidsInFamily={kids} allRewardsList={rewards} showConfirmation={showConfirmation} firebaseUser={user} />;
             case 'history': return <ParentRewardHistory familyId={familyId} redeemedRewards={redeemedRewardsData} completedTasks={completedTasks} kidsInFamily={kids} rewardsInFamily={rewards} tasksInFamily={tasks} />;
+            case 'highscores': return <KidHighscores currentFamilyId={familyId} />; // Pass currentFamilyId, currentKid is optional and not needed for parent view
             default: return <ManageTasks familyId={familyId} tasksInFamily={tasks} kidsInFamily={kids} completedTasks={completedTasks} showConfirmation={showConfirmation} />;
         }
     };
